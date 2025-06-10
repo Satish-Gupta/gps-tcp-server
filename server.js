@@ -11,6 +11,13 @@ function calculateChecksum(buffer) {
   return checksum;
 }
 
+function parseCoordinate(buffer) {
+  // GT06 signed 32-bit little endian / 1,800,000 scaling
+  const value = buffer.readInt32LE(0);
+  return value / 1800000;
+}
+
+
 // Utility: convert hex bytes to decimal degrees
 function convertCoordinate(raw, hemisphere) {
   const coord = parseInt(raw, 16);
@@ -68,10 +75,10 @@ const server = net.createServer(socket => {
       const second = data[9];
       const timestamp = `${year}-${month}-${day} ${hour}:${minute}:${second}`;
 
-      const latRaw = data.slice(13, 17).toString('hex');
-      const lngRaw = data.slice(17, 21).toString('hex');
-      const lat = convertCoordinate(latRaw, 'N');
-      const lng = convertCoordinate(lngRaw, 'E');
+      const latRaw = data.slice(14, 18).toString('hex');
+      const lngRaw = data.slice(10, 14).toString('hex');
+      const lat = parseCoordinate(latRaw);
+      const lng = parseCoordinate(lngRaw);
 
       console.log(`[${clientId}] Time: ${timestamp}`);
       console.log(`[${clientId}] Location: ${lat}, ${lng}`);
