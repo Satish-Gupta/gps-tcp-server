@@ -62,8 +62,8 @@ const server = net.createServer(socket => {
       const timestamp = `${year}-${month}-${day} ${hour}:${minute}:${second}`;
 
       // Extract and decode coordinates
-      const lngBytes = data.slice(10, 14); // longitude
-      const latBytes = data.slice(14, 18); // latitude
+      const lngBytes = data.slice(14, 18); // longitude
+      const latBytes = data.slice(10, 14); // latitude
 
       const latitude = parseCoordinateLE(latBytes);
       const longitude = parseCoordinateLE(lngBytes);
