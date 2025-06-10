@@ -11,23 +11,9 @@ function calculateChecksum(buffer) {
   return checksum;
 }
 
-function parseCoordinate(buffer) {
-  // GT06 signed 32-bit little endian / 1,800,000 scaling
-  const value = buffer.readInt32LE(0);
-  return value / 1800000;
-}
-
-
-// Utility: convert hex bytes to decimal degrees
-function convertCoordinate(raw, hemisphere) {
-  const coord = parseInt(raw, 16);
-  const deg = Math.floor(coord / 1000000);
-  const min = (coord % 1000000) / 10000;
-  let decimal = deg + min / 60;
-  if (hemisphere === 'S' || hemisphere === 'W') {
-    decimal = -decimal;
-  }
-  return decimal.toFixed(6);
+// Correct coordinate conversion (signed 32-bit LE / 1800000)
+function parseCoordinateLE(buffer) {
+  return buffer.readInt32LE(0) / 1800000;
 }
 
 const server = net.createServer(socket => {
@@ -66,22 +52,24 @@ const server = net.createServer(socket => {
     else if (protocol === 0x12) {
       console.log(`[${clientId}] GPS data packet received`);
 
-      const dateHex = data.slice(4, 10).toString('hex');
+      // Extract timestamp
       const year = 2000 + data[4];
-      const month = data[5];
-      const day = data[6];
-      const hour = data[7];
-      const minute = data[8];
-      const second = data[9];
+      const month = data[5].toString().padStart(2, '0');
+      const day = data[6].toString().padStart(2, '0');
+      const hour = data[7].toString().padStart(2, '0');
+      const minute = data[8].toString().padStart(2, '0');
+      const second = data[9].toString().padStart(2, '0');
       const timestamp = `${year}-${month}-${day} ${hour}:${minute}:${second}`;
 
-      const latRaw = data.slice(14, 18).toString('hex');
-      const lngRaw = data.slice(10, 14).toString('hex');
-      const lat = parseCoordinate(latRaw);
-      const lng = parseCoordinate(lngRaw);
+      // Extract and decode coordinates
+      const lngBytes = data.slice(10, 14); // longitude
+      const latBytes = data.slice(14, 18); // latitude
+
+      const latitude = parseCoordinateLE(latBytes);
+      const longitude = parseCoordinateLE(lngBytes);
 
       console.log(`[${clientId}] Time: ${timestamp}`);
-      console.log(`[${clientId}] Location: ${lat}, ${lng}`);
+      console.log(`[${clientId}] Location: ${latitude.toFixed(6)}, ${longitude.toFixed(6)}`);
 
       // ACK for GPS
       const serial1 = data[data.length - 4];
@@ -90,13 +78,13 @@ const server = net.createServer(socket => {
       const ack = Buffer.from([
         0x78, 0x78, 0x05, 0x12, serial1, serial2
       ]);
-    
+
       const checksum = calculateChecksum(ack);
       const packet = Buffer.concat([
         ack,
         Buffer.from([checksum, 0x0D, 0x0A])
       ]);
-        
+
       socket.write(packet);
       console.log(`[${clientId}] Sent GPS ACK: ${packet.toString('hex')}`);
     }
