@@ -12,8 +12,8 @@ function calculateChecksum(buffer) {
 }
 
 // Correct coordinate conversion (signed 32-bit LE / 1800000)
-function parseCoordinateLE(buffer) {
-  return buffer.readInt32LE(0) / 1800000;
+function parseCoordinateBE(buffer) {
+  return buffer.readInt32BE(0) / 1800000;
 }
 
 const server = net.createServer(socket => {
@@ -68,8 +68,8 @@ const server = net.createServer(socket => {
       console.log(latBytes);
       console.log(lngBytes);
       
-      const latitude = parseCoordinateLE(latBytes);
-      const longitude = parseCoordinateLE(lngBytes);
+      const latitude = parseCoordinateBE(latBytes);
+      const longitude = parseCoordinateBE(lngBytes);
       console.log(latitude);
       console.log(lngBytes);
       console.log(`[${clientId}] Time: ${timestamp}`);
