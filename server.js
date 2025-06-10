@@ -64,10 +64,14 @@ const server = net.createServer(socket => {
       // Extract and decode coordinates
       const lngBytes = data.slice(14, 18); // longitude
       const latBytes = data.slice(10, 14); // latitude
-
+      console.log("==========");
+      console.log(latBytes);
+      console.log(lngBytes);
+      
       const latitude = parseCoordinateLE(latBytes);
       const longitude = parseCoordinateLE(lngBytes);
-
+      console.log(latitude);
+      console.log(lngBytes);
       console.log(`[${clientId}] Time: ${timestamp}`);
       console.log(`[${clientId}] Location: ${latitude.toFixed(6)}, ${longitude.toFixed(6)}`);
 
