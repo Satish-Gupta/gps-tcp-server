@@ -128,7 +128,7 @@ function parseGT06Data(buffer) {
     switch (protocolNumber) {
         case 0x01: // Login Packet
             packet.type = 'login';
-            const hexData = data.toString('hex');
+            const hexData = buffer.toString('hex');
             const imeiHex = hexData.slice(8, 24);
             const imei = BigInt("0x" + imeiHex).toString();
             packet.imei = imei;
