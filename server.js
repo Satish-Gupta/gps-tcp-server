@@ -1,7 +1,7 @@
 const net = require('net');
 
 // Parses a GT06 GPS packet and logs timestamp, latitude, and longitude
-function parseGPS(hex) {
+function parseGPS(hex, socket) {
     try {
         if (!hex.startsWith("7878")) {
             console.log("Invalid packet header");
@@ -30,7 +30,10 @@ function parseGPS(hex) {
             console.log(`  📌 Longitude: ${longitude.toFixed(6)}`);
         } else if (protocol === "01") {
             const imeiHex = hex.slice(8, 24);
-            const imei = BigInt("0x" + imeiHex).toString();
+            const imei = Array.from({ length: 8 }, (_, i) =>
+              hex.slice(8 + i * 2, 10 + i * 2)
+            ).map(h => parseInt(h, 16).toString(16).padStart(2, '0')).join('');
+            console.log(`🔑 Login packet from IMEI: ${imei}`);
             console.log(`🔑 Login packet from IMEI: ${imei}`);
 
             // Send login response
@@ -53,7 +56,7 @@ const server = net.createServer((socket) => {
     socket.on('data', (data) => {
         const hexData = data.toString('hex');
         console.log(`[${remoteAddress}] Raw data: ${hexData}`);
-        parseGPS(hexData);
+        parseGPS(hexData, socket);
     });
 
     socket.on('close', () => {
