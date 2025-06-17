@@ -1,112 +1,63 @@
 const net = require('net');
 
-const PORT = 5000;
+// Parses a GT06 GPS packet and logs timestamp, latitude, and longitude
+function parseGPS(hex) {
+    try {
+        if (!hex.startsWith("7878")) {
+            console.log("Invalid packet header");
+            return;
+        }
 
-// Utility: calculate XOR checksum for GT06
-function calculateChecksum(buffer) {
-  let checksum = 0;
-  for (let i = 2; i < buffer.length - 3; i++) {
-    checksum ^= buffer[i];
-  }
-  return checksum;
+        const protocol = hex.slice(6, 8);
+        if (protocol === "12") {
+            const year = 2000 + parseInt(hex.slice(8, 10), 16);
+            const month = parseInt(hex.slice(10, 12), 16);
+            const day = parseInt(hex.slice(12, 14), 16);
+            const hour = parseInt(hex.slice(14, 16), 16);
+            const minute = parseInt(hex.slice(16, 18), 16);
+            const second = parseInt(hex.slice(18, 20), 16);
+            const timestamp = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')} ${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}:${String(second).padStart(2, '0')}`;
+
+            const latRaw = parseInt(hex.slice(20, 28), 16);
+            const lonRaw = parseInt(hex.slice(28, 36), 16);
+
+            const latitude = latRaw / 1800000;
+            const longitude = lonRaw / 1800000;
+
+            console.log(`📍 GPS Data Received`);
+            console.log(`  🕒 Timestamp: ${timestamp}`);
+            console.log(`  📌 Latitude: ${latitude.toFixed(6)}`);
+            console.log(`  📌 Longitude: ${longitude.toFixed(6)}`);
+        } else {
+            console.log(`Unsupported protocol: ${protocol}`);
+        }
+    } catch (err) {
+        console.error('Parsing error:', err.message);
+    }
 }
 
-// Correct coordinate conversion (signed 32-bit LE / 1800000)
-function parseCoordinateBE(buffer) {
-  return buffer.readInt32BE(0) / 1800000;
-}
+// Create TCP server
+const server = net.createServer((socket) => {
+    const remoteAddress = `${socket.remoteAddress}:${socket.remotePort}`;
+    console.log(`[${remoteAddress}] Connected`);
 
-const server = net.createServer(socket => {
-  const clientId = `${socket.remoteAddress}:${socket.remotePort}`;
-  console.log(`Client connected: ${clientId}`);
+    socket.on('data', (data) => {
+        const hexData = data.toString('hex');
+        console.log(`[${remoteAddress}] Raw data: ${hexData}`);
+        parseGPS(hexData);
+    });
 
-  socket.on('data', data => {
-    const hex = data.toString('hex');
-    console.log(`\n[${clientId}] Raw data: ${hex}`);
+    socket.on('close', () => {
+        console.log(`[${remoteAddress}] Disconnected`);
+    });
 
-    const protocol = data[3];
-
-    // --- LOGIN PACKET ---
-    if (protocol === 0x01) {
-      console.log(`[${clientId}] Login packet received`);
-
-      // Send ACK
-      const serial1 = data[data.length - 4];
-      const serial2 = data[data.length - 3];
-
-      const ack = Buffer.from([
-        0x78, 0x78, 0x05, 0x01, serial1, serial2
-      ]);
-
-      const checksum = calculateChecksum(ack);
-      const packet = Buffer.concat([
-        ack,
-        Buffer.from([checksum, 0x0D, 0x0A])
-      ]);
-
-      socket.write(packet);
-      console.log(`[${clientId}] Sent login ACK: ${packet.toString('hex')}`);
-    }
-
-    // --- GPS LOCATION PACKET ---
-    else if (protocol === 0x12) {
-      console.log(`[${clientId}] GPS data packet received`);
-
-      // Extract timestamp
-      const year = 2000 + data[4];
-      const month = data[5].toString().padStart(2, '0');
-      const day = data[6].toString().padStart(2, '0');
-      const hour = data[7].toString().padStart(2, '0');
-      const minute = data[8].toString().padStart(2, '0');
-      const second = data[9].toString().padStart(2, '0');
-      const timestamp = `${year}-${month}-${day} ${hour}:${minute}:${second}`;
-
-      // Extract and decode coordinates
-      const lngBytes = data.slice(14, 18); // longitude
-      const latBytes = data.slice(10, 14); // latitude
-      console.log("==========");
-      console.log(latBytes);
-      console.log(lngBytes);
-      
-      const latitude = parseCoordinateBE(latBytes);
-      const longitude = parseCoordinateBE(lngBytes);
-      console.log(latitude);
-      console.log(lngBytes);
-      console.log(`[${clientId}] Time: ${timestamp}`);
-      console.log(`[${clientId}] Location: ${latitude.toFixed(6)}, ${longitude.toFixed(6)}`);
-
-      // ACK for GPS
-      const serial1 = data[data.length - 4];
-      const serial2 = data[data.length - 3];
-
-      const ack = Buffer.from([
-        0x78, 0x78, 0x05, 0x12, serial1, serial2
-      ]);
-
-      const checksum = calculateChecksum(ack);
-      const packet = Buffer.concat([
-        ack,
-        Buffer.from([checksum, 0x0D, 0x0A])
-      ]);
-
-      socket.write(packet);
-      console.log(`[${clientId}] Sent GPS ACK: ${packet.toString('hex')}`);
-    }
-
-    else {
-      console.log(`[${clientId}] Unknown protocol: 0x${protocol.toString(16)}`);
-    }
-  });
-
-  socket.on('close', () => {
-    console.log(`Client disconnected: ${clientId}`);
-  });
-
-  socket.on('error', err => {
-    console.error(`Error from ${clientId}:`, err.message);
-  });
+    socket.on('error', (err) => {
+        console.error(`[${remoteAddress}] Error: ${err.message}`);
+    });
 });
 
+// Start server
+const PORT = 5000;
 server.listen(PORT, () => {
-  console.log(`🚀 GPS TCP Server listening on port ${PORT}`);
+    console.log(`🚀 GPS server listening on port ${PORT}`);
 });
