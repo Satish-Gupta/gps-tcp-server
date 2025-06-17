@@ -1,15 +1,24 @@
 {
-    "name": "gps-tcp-server",
-    "version": "1.0.0",
-    "description": "A simple TCP server to listen for GPS device data",
-    "main": "server.js",
-    "scripts": {
-      "start": "node server.js"
-    },
-    "author": "",
-    "license": "MIT"
-    "dependencies": {
-        "ws": "^8.17.0"
-      }
+  "name": "gps-tracker-server",
+  "version": "1.0.0",
+  "description": "A simple Node.js TCP and WebSocket server to track GT06 protocol GPS devices.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "gps",
+    "tracker",
+    "gt06",
+    "tcp",
+    "server",
+    "nodejs",
+    "leaflet"
+  ],
+  "author": "Your Name",
+  "license": "ISC",
+  "dependencies": {
+    "ws": "^8.17.0"
   }
-  
+}
