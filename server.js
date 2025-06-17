@@ -113,7 +113,15 @@ const tcpServer = net.createServer(socket => {
     });
 });
 
-
+function decodeImeiFromBcd(hex) {
+  let imei = '';
+  for (let i = 0; i < hex.length; i += 2) {
+    const byte = hex.substr(i, 2);
+    imei += byte[0];
+    if (byte[1].toLowerCase() !== 'f') imei += byte[1];
+  }
+  return imei.slice(0, 15);
+}
 // --- 2. GT06 PROTOCOL PARSER ---
 
 function parseGT06Data(buffer) {
@@ -130,8 +138,8 @@ function parseGT06Data(buffer) {
             packet.type = 'login';
             const hexData = buffer.toString('hex');
             const imeiHex = hexData.slice(8, 24);
-            const imei = BigInt("0x" + imeiHex).toString();
-            packet.imei = imei;
+            //const imei = BigInt("0x" + imeiHex).toString();
+            packet.imei = decodeImeiFromBcd(imei);
             return packet;
 
         case 0x12: // Location Data Packet
