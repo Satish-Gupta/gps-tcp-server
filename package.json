@@ -8,5 +8,8 @@
     },
     "author": "",
     "license": "MIT"
+    "dependencies": {
+        "ws": "^8.17.0"
+      }
   }
   
