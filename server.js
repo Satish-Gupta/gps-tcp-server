@@ -140,16 +140,16 @@ function parseGT06Data(buffer) {
             
             // Latitude (Big Endian, signed)
             let lat = buffer.readInt32BE(11);
-            if((buffer.readUInt8(16) & 0x08) === 0){ // Check South/North bit in course/status
-                lat = -lat; // South
-            }
+            // if((buffer.readUInt8(16) & 0x08) === 0){ // Check South/North bit in course/status
+            //     lat = -lat; // South
+            // }
             packet.lat = lat / 1800000.0;
             
             // Longitude (Big Endian, signed)
             let lon = buffer.readInt32BE(15);
-             if((buffer.readUInt8(16) & 0x04) !== 0){ // Check East/West bit
-                lon = -lon; // West
-            }
+            //  if((buffer.readUInt8(16) & 0x04) !== 0){ // Check East/West bit
+            //     lon = -lon; // West
+            // }
             packet.lon = lon / 1800000.0;
             
             packet.speed = buffer.readUInt8(19);
