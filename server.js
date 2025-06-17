@@ -31,7 +31,7 @@ const http = require('http');
 const WebSocket = require('ws');
 
 // --- CONFIGURATION ---
-const TCP_PORT = 8080; // Port for GPS trackers
+const TCP_PORT = 5000; // Port for GPS trackers
 const HTTP_PORT = 8081; // Port for the web interface
 
 // In-memory storage for tracker data
