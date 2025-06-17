@@ -139,7 +139,7 @@ function parseGT06Data(buffer) {
             const hexData = buffer.toString('hex');
             const imeiHex = hexData.slice(8, 24);
             //const imei = BigInt("0x" + imeiHex).toString();
-            packet.imei = decodeImeiFromBcd(imei);
+            packet.imei = decodeImeiFromBcd(imeiHex);
             return packet;
 
         case 0x12: // Location Data Packet
