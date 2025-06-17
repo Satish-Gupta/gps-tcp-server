@@ -28,6 +28,15 @@ function parseGPS(hex) {
             console.log(`  🕒 Timestamp: ${timestamp}`);
             console.log(`  📌 Latitude: ${latitude.toFixed(6)}`);
             console.log(`  📌 Longitude: ${longitude.toFixed(6)}`);
+        } else if (protocol === "01") {
+            const imeiHex = hex.slice(8, 24);
+            const imei = BigInt("0x" + imeiHex).toString();
+            console.log(`🔑 Login packet from IMEI: ${imei}`);
+
+            // Send login response
+            const response = Buffer.from("787805010001d9dc0d0a", "hex");
+            socket.write(response);
+            console.log(`✅ Sent login response`);
         } else {
             console.log(`Unsupported protocol: ${protocol}`);
         }
