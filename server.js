@@ -1,5 +1,4 @@
 const net = require('net');
-
 function parseCoordinate(hexStr) {
     const raw = parseInt(hexStr, 16);
     return raw / 30000 / 60;
@@ -35,16 +34,20 @@ function parseGPS(hex, socket) {
 
             const latHex = hex.slice(20, 28);
             const lonHex = hex.slice(28, 36);
+            const lat = parseCoordinate(latHex);
+            const lon = parseCoordinate(lonHex);
 
-            const latitude = parseCoordinate(latHex);
-            const longitude = parseCoordinate(lonHex);
+            const flagsByte = parseInt(hex.slice(36, 38), 16);
+            const isSouth = (flagsByte & 0b10000000) !== 0;
+            const isWest = (flagsByte & 0b01000000) !== 0;
+
+            const latitude = isSouth ? -lat : lat;
+            const longitude = isWest ? -lon : lon;
 
             console.log(`📍 GPS Data Received`);
             console.log(`  🕒 Timestamp: ${timestamp}`);
             console.log(`  📌 Latitude: ${latitude.toFixed(6)}`);
             console.log(`  📌 Longitude: ${longitude.toFixed(6)}`);
-
-            // Optional: ACK GPS here
         }
 
         else if (protocol === "13") {
@@ -61,6 +64,7 @@ function parseGPS(hex, socket) {
         console.error('Parsing error:', err.message);
     }
 }
+
 
 // Create TCP server
 const server = net.createServer((socket) => {
