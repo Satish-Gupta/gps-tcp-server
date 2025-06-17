@@ -1,6 +1,10 @@
 const net = require('net');
 
-// Parses a GT06 GPS packet and logs timestamp, latitude, and longitude
+function parseCoordinate(hexStr) {
+    const raw = parseInt(hexStr, 16);
+    return raw / 30000 / 60;
+}
+
 function parseGPS(hex, socket) {
     try {
         if (!hex.startsWith("7878")) {
@@ -9,7 +13,18 @@ function parseGPS(hex, socket) {
         }
 
         const protocol = hex.slice(6, 8);
-        if (protocol === "12") {
+
+        if (protocol === "01") {
+            const imeiHex = hex.slice(8, 24);
+            const imei = BigInt("0x" + imeiHex).toString();
+            console.log(`🔑 Login packet from IMEI: ${imei}`);
+
+            const response = Buffer.from("787805010001d9dc0d0a", "hex");
+            socket.write(response);
+            console.log(`✅ Sent login response`);
+        }
+
+        else if (protocol === "12") {
             const year = 2000 + parseInt(hex.slice(8, 10), 16);
             const month = parseInt(hex.slice(10, 12), 16);
             const day = parseInt(hex.slice(12, 14), 16);
@@ -18,29 +33,28 @@ function parseGPS(hex, socket) {
             const second = parseInt(hex.slice(18, 20), 16);
             const timestamp = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')} ${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}:${String(second).padStart(2, '0')}`;
 
-            const latRaw = parseInt(hex.slice(20, 28), 16);
-            const lonRaw = parseInt(hex.slice(28, 36), 16);
+            const latHex = hex.slice(20, 28);
+            const lonHex = hex.slice(28, 36);
 
-            const latitude = latRaw / 1800000;
-            const longitude = lonRaw / 1800000;
+            const latitude = parseCoordinate(latHex);
+            const longitude = parseCoordinate(lonHex);
 
             console.log(`📍 GPS Data Received`);
             console.log(`  🕒 Timestamp: ${timestamp}`);
             console.log(`  📌 Latitude: ${latitude.toFixed(6)}`);
             console.log(`  📌 Longitude: ${longitude.toFixed(6)}`);
-        } else if (protocol === "01") {
-            const imeiHex = hex.slice(8, 24);
-            const imei = Array.from({ length: 8 }, (_, i) =>
-              hex.slice(8 + i * 2, 10 + i * 2)
-            ).map(h => parseInt(h, 16).toString(16).padStart(2, '0')).join('');
-            console.log(`🔑 Login packet from IMEI: ${imei}`);
-            console.log(`🔑 Login packet from IMEI: ${imei}`);
 
-            // Send login response
-            const response = Buffer.from("787805010001d9dc0d0a", "hex");
+            // Optional: ACK GPS here
+        }
+
+        else if (protocol === "13") {
+            console.log("❤️ Heartbeat packet received");
+            const response = Buffer.from("787805130001d9dc0d0a", "hex");
             socket.write(response);
-            console.log(`✅ Sent login response`);
-        } else {
+            console.log("✅ Sent heartbeat response");
+        }
+
+        else {
             console.log(`Unsupported protocol: ${protocol}`);
         }
     } catch (err) {
