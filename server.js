@@ -137,7 +137,7 @@ function parseGT06Data(buffer) {
         case 0x01: // Login Packet
             packet.type = 'login';
             const hexData = buffer.toString('hex');
-            const imeiHex = hexData.slice(8, 24);
+            const imeiHex = hexData.slice(9, 25);
             //const imei = BigInt("0x" + imeiHex).toString();
             packet.imei = decodeImeiFromBcd(imeiHex);
             return packet;
