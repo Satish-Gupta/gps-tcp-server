@@ -207,7 +207,21 @@ wss.on('connection', ws => {
     console.log('[WS] New web client connected.');
     // Send the current state of all trackers to the newly connected client
     ws.send(JSON.stringify({ type: 'initial_state', data: Array.from(trackers.values()) }));
-    
+     ws.on('message', message => {
+        try {
+            const data = JSON.parse(message);
+            console.log('[WS] Received message from client:', data);
+
+            if (data.type === 'update' || data.type == 'initial_state') {
+                trackers.set(data.data.imei, data.data);
+
+                // Broadcast to all clients
+                broadcastToWebClients(data.data);
+            }
+        } catch (e) {
+            console.error('[WS] Error parsing client message:', e);
+        }
+    });
     ws.on('close', () => {
         console.log('[WS] Web client disconnected.');
     });
