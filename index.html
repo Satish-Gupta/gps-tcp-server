@@ -3,7 +3,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>Enhanced GPS Simulator</title>
+  <title>GPS Simulator with Custom Alert Zone</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -11,7 +11,7 @@
     html, body { height: 100%; margin: 0; padding: 0; }
     #container { display: flex; height: 100%; overflow: hidden; }
     #controls {
-      width: 300px;
+      width: 350px;
       padding: 10px;
       background: #fff;
       box-shadow: 2px 0 5px rgba(0, 0, 0, 0.2);
@@ -19,7 +19,18 @@
       overflow-y: auto;
       box-sizing: border-box;
     }
-    #map { flex: 1; height: 100%; }
+    #tabs { display: flex; margin-bottom: 10px; }
+    .tab-button {
+      flex: 1;
+      padding: 8px;
+      background: #eee;
+      border: 1px solid #ccc;
+      cursor: pointer;
+      text-align: center;
+    }
+    .tab-button.active { background: #ddd; font-weight: bold; }
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
     input, button {
       width: 100%; padding: 8px; margin-bottom: 10px; box-sizing: border-box;
     }
@@ -34,189 +45,333 @@
     .suggestions div:hover {
       background: #eee;
     }
+    #map { flex: 1; height: 100%; }
     #status { font-size: 12px; color: #444; margin-top: 10px; }
+    .vehicle-status {
+      font-size: 12px;
+      margin-bottom: 6px;
+      border-bottom: 1px solid #ccc;
+      padding-bottom: 4px;
+    }
+    .highlight {
+      color: green;
+      font-weight: bold;
+    }
   </style>
 </head>
 <body>
   <div id="container">
     <div id="controls">
-      <label>IMEI:</label>
-      <input id="imei" value="868000001111111" />
+      <div id="tabs">
+        <div class="tab-button active" onclick="switchTab(0)">Vehicle 1</div>
+        <div class="tab-button" onclick="switchTab(1)">Vehicle 2</div>
+      </div>
+      <div id="tab-0" class="tab-content active">
+        <label>IMEI:</label>
+        <input id="imei1" value="868000001111111" />
 
-      <label>Start Address:</label>
-      <input id="start-addr" autocomplete="off" />
-      <div id="start-suggestions" class="suggestions"></div>
+        <label>Start Address:</label>
+        <input id="start-addr-1" autocomplete="off" />
+        <div id="start-suggestions-1" class="suggestions"></div>
 
-      <label>Destination Address:</label>
-      <input id="dest-addr" autocomplete="off" />
-      <div id="dest-suggestions" class="suggestions"></div>
+        <label>Destination Address:</label>
+        <input id="dest-addr-1" autocomplete="off" />
+        <div id="dest-suggestions-1" class="suggestions"></div>
 
-      <label>Push Delay (sec):</label>
-      <input id="delay" type="number" value="1" min="0.1" step="0.1" />
+        <label>Custom Alert Zone:</label>
+        <input id="zone-addr-1" autocomplete="off" />
+        <div id="zone-suggestions-1" class="suggestions"></div>
 
-      <label>Total Travel Time (sec):</label>
-      <input id="travelTime" type="number" value="60" min="1" />
+        <label>Push Delay (sec):</label>
+        <input id="delay-1" type="number" value="1" min="0.1" step="0.1" />
 
-      <button onclick="fetchRoute()">Generate Route</button>
+        <label>Total Travel Time (sec):</label>
+        <input id="travelTime-1" type="number" value="60" min="1" />
+
+        <label>Out-of-Bound Radius (km):</label>
+        <input id="radius-1" type="number" value="1" min="0.01" step="0.01" />
+
+        <label>Custom Zone Radius (km):</label>
+        <input id="zone-radius-1" type="number" value="0.5" min="0.01" step="0.01" />
+
+        <div id="vehicle-alert-1" class="vehicle-status">Status: Idle.</div>
+        <div id="vehicle-status-1" class="vehicle-status">Status: Idle.</div>
+      </div>
+      <div id="tab-1" class="tab-content">
+        <label>IMEI:</label>
+        <input id="imei2" value="868000001111112" />
+
+        <label>Start Address:</label>
+        <input id="start-addr-2" autocomplete="off" />
+        <div id="start-suggestions-2" class="suggestions"></div>
+
+        <label>Destination Address:</label>
+        <input id="dest-addr-2" autocomplete="off" />
+        <div id="dest-suggestions-2" class="suggestions"></div>
+
+        <label>Custom Alert Zone:</label>
+        <input id="zone-addr-2" autocomplete="off" />
+        <div id="zone-suggestions-2" class="suggestions"></div>
+
+        <label>Push Delay (sec):</label>
+        <input id="delay-2" type="number" value="1" min="0.1" step="0.1" />
+
+        <label>Total Travel Time (sec):</label>
+        <input id="travelTime-2" type="number" value="60" min="1" />
+
+        <label>Out-of-Bound Radius (km):</label>
+        <input id="radius-2" type="number" value="1" min="0.01" step="0.01" />
+
+        <label>Custom Zone Radius (km):</label>
+        <input id="zone-radius-2" type="number" value="0.5" min="0.01" step="0.01" />
+		<div id="vehicle-alert-2" class="vehicle-status">Status: Idle.</div>
+        <div id="vehicle-status-2" class="vehicle-status">Status: Idle.</div>
+      </div>
+      <button onclick="fetchRoute(1)">Generate Route 1</button>
+      <button onclick="fetchRoute(2)">Generate Route 2</button>
       <button onclick="startSimulation()">Start</button>
-      <button onclick="togglePause()">Pause / Resume</button>
-      <button onclick="stopSimulation()">Stop</button>
-
       <div id="status">Idle.</div>
     </div>
     <div id="map"></div>
   </div>
+<script>
+  // ================================
+  // ========== CONFIG =============
+  // ================================
 
-  <script>
-    const map = L.map('map').setView([28.3949, 84.1240], 8);
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
+  const routePaths = {};
+  const vehicleMarkers = {};
+  const simulationIntervals = {};
+  let map;
+  const alertStates = {
+    sourceExited: {},
+    destinationReached: {},
+    zoneEntered: {}
+  };
+      const defaultAddresses = [
+      { start: 'Tulsipur, Nepal', dest: 'Bijauri, Tulsipur, Nepal' },
+      { start: 'Ghorahi, Nepal', dest: 'Narayanpur, Ghorahi, Nepal' }
+    ];
+    defaultAddresses.forEach((addr, idx) => {
+      geocodeAndFill(`start-addr-${idx + 1}`, addr.start);
+      geocodeAndFill(`dest-addr-${idx + 1}`, addr.dest);
+      setupAutocompleteNepal(`start-addr-${idx + 1}`, `start-suggestions-${idx + 1}`);
+      setupAutocompleteNepal(`dest-addr-${idx + 1}`, `dest-suggestions-${idx + 1}`);
+      setupAutocompleteNepal(`zone-addr-${idx + 1}`, `zone-suggestions-${idx + 1}`);
+    });
+  const ws = new WebSocket('ws://103.90.84.153:8081');
 
-    const ws = new WebSocket('ws://' + '103.90.84.153' + ':8081');
-    ws.onopen = () => updateStatus('WebSocket connected');
-    ws.onclose = () => updateStatus('WebSocket disconnected');
+  // ================================
+  // ========== INIT ===============
+  // ================================
 
-    let startMarker, destMarker, routeLine, simMarker;
-    let routeCoords = [], simIdx = 0, simTimer, isPaused = false;
-    let variableStopIndices = [];
+  function initializeMap() {
+    map = L.map('map').setView([28.4, 83.9], 8);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      attribution: '© OpenStreetMap'
+    }).addTo(map);
+    return map;
+  }
 
-    function updateStatus(msg) {
-      document.getElementById('status').textContent = msg;
-    }
+  function initializeUI(defaultAddresses) {
+    defaultAddresses.forEach((addr, idx) => {
+      const i = idx + 1;
+      geocodeAndFill(`start-addr-${i}`, addr.start);
+      geocodeAndFill(`dest-addr-${i}`, addr.dest);
+      setupAutocompleteNepal(`start-addr-${i}`, `start-suggestions-${i}`);
+      setupAutocompleteNepal(`dest-addr-${i}`, `dest-suggestions-${i}`);
+      setupAutocompleteNepal(`zone-addr-${i}`, `zone-suggestions-${i}`);
+    });
+  }
 
-    function setupAutocomplete(inputId, suggestionId) {
-      const input = document.getElementById(inputId);
-      const suggBox = document.getElementById(suggestionId);
-      let timeout = null;
+  // ================================
+  // ======== AUTOCOMPLETE =========
+  // ================================
 
-      input.addEventListener('input', () => {
-        clearTimeout(timeout);
-        const query = input.value.trim();
-        if (!query) return suggBox.innerHTML = '';
-
-        timeout = setTimeout(() => {
-          fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}`)
-            .then(res => res.json())
-            .then(results => {
-              suggBox.innerHTML = '';
-              results.slice(0, 5).forEach(loc => {
-                const div = document.createElement('div');
-                div.textContent = loc.display_name;
-                div.dataset.lat = loc.lat;
-                div.dataset.lon = loc.lon;
-                div.onclick = () => {
-                  input.value = loc.display_name;
-                  input.dataset.lat = loc.lat;
-                  input.dataset.lon = loc.lon;
-                  suggBox.innerHTML = '';
-                };
-                suggBox.appendChild(div);
-              });
+  function setupAutocompleteNepal(inputId, suggId) {
+    const input = document.getElementById(inputId);
+    const box = document.getElementById(suggId);
+    let timeout = null;
+    input.addEventListener('input', () => {
+      clearTimeout(timeout);
+      const q = input.value.trim();
+      if (!q) return box.innerHTML = '';
+      timeout = setTimeout(() => {
+        fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(q + ' Nepal')}`)
+          .then(r => r.json())
+          .then(res => {
+            box.innerHTML = '';
+            res.filter(x => x.display_name.includes('Nepal')).slice(0, 5).forEach(loc => {
+              const div = document.createElement('div');
+              div.textContent = loc.display_name;
+              div.dataset.lat = loc.lat;
+              div.dataset.lon = loc.lon;
+              div.onclick = () => {
+                input.value = loc.display_name;
+                input.dataset.lat = loc.lat;
+                input.dataset.lon = loc.lon;
+                box.innerHTML = '';
+              };
+              box.appendChild(div);
             });
-        }, 300);
+          });
+      }, 300);
+    });
+  }
+
+  function geocodeAndFill(id, address) {
+    fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(address)}`)
+      .then(res => res.json())
+      .then(data => {
+        if (data[0]) {
+          const input = document.getElementById(id);
+          input.value = data[0].display_name;
+          input.dataset.lat = data[0].lat;
+          input.dataset.lon = data[0].lon;
+        }
       });
+  }
+
+  // ================================
+  // ========== UI =================
+  // ================================
+
+  function switchTab(tabIndex) {
+    document.querySelectorAll('.tab-button').forEach((b, i) => b.classList.toggle('active', i === tabIndex));
+    document.querySelectorAll('.tab-content').forEach((c, i) => c.classList.toggle('active', i === tabIndex));
+  }
+
+  function updateStatus(msg) {
+    document.getElementById('status').textContent = msg;
+  }
+
+  function updateVehicleStatus(tabIndex, msg, highlight = false, append = false, alert = false) {
+    const el = document.getElementById(`${alert ? 'vehicle-alert-' : 'vehicle-status-'}${tabIndex}`);
+    if (!el) return;
+    const formatted = highlight ? `<span class="highlight">${msg}</span>` : msg;
+    if (append) {
+      el.innerHTML += `<br/>${formatted}`;
+    } else {
+      el.innerHTML = formatted;
     }
+  }
 
-    setupAutocomplete('start-addr', 'start-suggestions');
-    setupAutocomplete('dest-addr', 'dest-suggestions');
+  // ================================
+  // ======= GEOSPATIAL ============
+  // ================================
 
-    function fetchRoute() {
-      const s = document.getElementById('start-addr').dataset;
-      const d = document.getElementById('dest-addr').dataset;
-      if (!s.lat || !d.lat) return updateStatus('Select both addresses.');
+  function calculateDistance(lat1, lon1, lat2, lon2) {
+    const R = 6371;
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLon = (lon2 - lon1) * Math.PI / 180;
+    const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon / 2) ** 2;
+    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  }
 
-      const start = { lat: +s.lat, lon: +s.lon };
-      const dest = { lat: +d.lat, lon: +d.lon };
+  // ================================
+  // ========== WS =================
+  // ================================
 
-      if (startMarker) map.removeLayer(startMarker);
-      if (destMarker) map.removeLayer(destMarker);
-      if (routeLine) map.removeLayer(routeLine);
+  function sendWS(imei, lat, lon, speed, course) {
+    if (ws.readyState !== WebSocket.OPEN) return;
+    const now = new Date().toISOString();
+    ws.send(JSON.stringify({
+      type: 'update',
+      data: { imei, lat, lon, speed: Math.round(speed), course: Math.round(course), datetime: now, lastUpdate: now }
+    }));
+  }
 
-      startMarker = L.marker([start.lat, start.lon]).addTo(map).bindPopup('Start');
-      destMarker = L.marker([dest.lat, dest.lon]).addTo(map).bindPopup('Destination');
-      map.fitBounds([[start.lat, start.lon], [dest.lat, dest.lon]], { padding: [50, 50] });
+  // ================================
+  // ======= ROUTING/SIM ===========
+  // ================================
 
-      updateStatus('Fetching route...');
-      fetch(`https://router.project-osrm.org/route/v1/driving/${start.lon},${start.lat};${dest.lon},${dest.lat}?overview=full&geometries=geojson`)
-        .then(res => res.json())
-        .then(data => {
-          routeCoords = data.routes[0].geometry.coordinates.map(c => ({ lat: c[1], lon: c[0] }));
-          routeLine = L.polyline(routeCoords, { color: 'blue', weight: 4 }).addTo(map);
-          updateStatus(`Route ready (${routeCoords.length} points)`);
-        })
-        .catch(() => updateStatus('Failed to get route.'));
-    }
+  function fetchRoute(tabIndex) {
+    const start = document.getElementById(`start-addr-${tabIndex}`);
+    const dest = document.getElementById(`dest-addr-${tabIndex}`);
+    const slat = parseFloat(start.dataset.lat), slon = parseFloat(start.dataset.lon);
+    const dlat = parseFloat(dest.dataset.lat), dlon = parseFloat(dest.dataset.lon);
+    if (isNaN(slat) || isNaN(dlat)) return alert("Please select valid suggestions for start/destination.");
 
-    function calculateCourse(from, to) {
-      const dy = to.lat - from.lat;
-      const dx = to.lon - from.lon;
-      const angle = Math.atan2(dy, dx) * (180 / Math.PI);
-      return (angle + 360) % 360;
-    }
+    fetch(`https://router.project-osrm.org/route/v1/driving/${slon},${slat};${dlon},${dlat}?overview=full&geometries=geojson`)
+      .then(r => r.json())
+      .then(data => {
+        if (!data.routes?.[0]) return alert("No route found.");
+        const coords = data.routes[0].geometry.coordinates.map(p => [p[1], p[0]]);
+        if (routePaths[tabIndex]) map.removeLayer(routePaths[tabIndex]);
+        routePaths[tabIndex] = L.polyline(coords, { color: tabIndex === 1 ? 'blue' : 'red' }).addTo(map);
+        map.fitBounds(routePaths[tabIndex].getBounds());
+        if (vehicleMarkers[tabIndex]) map.removeLayer(vehicleMarkers[tabIndex]);
+        updateVehicleStatus(tabIndex, "Route loaded.");
+      });
+  }
 
-    function startSimulation() {
-      if (!routeCoords.length) return updateStatus('No route loaded');
-      const delay = parseFloat(document.getElementById('delay').value) * 1000;
-      const totalTime = parseFloat(document.getElementById('travelTime').value);
-      const stepTime = (totalTime / routeCoords.length) * 1000;
-      const actualDelay = Math.max(delay, stepTime);
+  function simulateVehicle(tabIndex) {
+    const coords = routePaths[tabIndex]?.getLatLngs();
+    if (!coords) return updateVehicleStatus(tabIndex, "No route loaded.");
 
-      variableStopIndices = [];
-      for (let i = 3; i < routeCoords.length; i += Math.floor(Math.random() * 5) + 4) {
-        variableStopIndices.push(i);
+    const imei = document.getElementById(`imei${tabIndex}`).value;
+    const delay = parseFloat(document.getElementById(`delay-${tabIndex}`).value) * 1000;
+    const radius = parseFloat(document.getElementById(`radius-${tabIndex}`).value);
+    const zoneRadius = parseFloat(document.getElementById(`zone-radius-${tabIndex}`).value);
+    const start = document.getElementById(`start-addr-${tabIndex}`);
+    const dest = document.getElementById(`dest-addr-${tabIndex}`);
+    const zone = document.getElementById(`zone-addr-${tabIndex}`);
+    const startLat = parseFloat(start.dataset.lat), startLon = parseFloat(start.dataset.lon);
+    const destLat = parseFloat(dest.dataset.lat), destLon = parseFloat(dest.dataset.lon);
+    const zoneLat = parseFloat(zone.dataset.lat), zoneLon = parseFloat(zone.dataset.lon);
+
+    alertStates.sourceExited[tabIndex] = false;
+    alertStates.destinationReached[tabIndex] = false;
+    alertStates.zoneEntered[tabIndex] = false;
+
+    let i = 0;
+    vehicleMarkers[tabIndex] = L.marker(coords[0]).addTo(map);
+
+    simulationIntervals[tabIndex] = setInterval(() => {
+      if (i >= coords.length) return clearInterval(simulationIntervals[tabIndex]);
+
+      const pos = coords[i];
+      const next = coords[i + 1] || pos;
+      const speed = Math.random() < 0.2 ? 0 : calculateDistance(pos.lat, pos.lng, next.lat, next.lng) * 3600 / (delay / 1000);
+      let course = Math.atan2(next.lng - pos.lng, next.lat - pos.lat) * 180 / Math.PI;
+      if (course < 0) course += 360;
+
+      vehicleMarkers[tabIndex].setLatLng(pos);
+      sendWS(imei, pos.lat, pos.lng, speed, course);
+
+      const distFromStart = calculateDistance(pos.lat, pos.lng, startLat, startLon);
+      const distToDest = calculateDistance(pos.lat, pos.lng, destLat, destLon);
+      const distToZone = (!isNaN(zoneLat) && !isNaN(zoneLon)) ? calculateDistance(pos.lat, pos.lng, zoneLat, zoneLon) : null;
+
+      updateVehicleStatus(tabIndex, `Lat: ${pos.lat.toFixed(5)}, Lon: ${pos.lng.toFixed(5)}, Speed: ${speed.toFixed(1)} km/h`);
+
+      if (distFromStart > radius && !alertStates.sourceExited[tabIndex]) {
+        updateVehicleStatus(tabIndex, `Vehicle ${tabIndex} exited source radius!`, true, true, true);
+        alertStates.sourceExited[tabIndex] = true;
       }
 
-      simIdx = 0;
-      isPaused = false;
+      if (distToDest < radius && !alertStates.destinationReached[tabIndex]) {
+        updateVehicleStatus(tabIndex, `Vehicle ${tabIndex} arrived at destination!`, true, true, true);
+        alertStates.destinationReached[tabIndex] = true;
+      }
 
-      if (simMarker) map.removeLayer(simMarker);
-      simMarker = L.marker([routeCoords[0].lat, routeCoords[0].lon]).addTo(map);
+      if (distToZone !== null && distToZone < zoneRadius && !alertStates.zoneEntered[tabIndex]) {
+        updateVehicleStatus(tabIndex, `Vehicle ${tabIndex} entered custom alert zone!`, true, true, true);
+        alertStates.zoneEntered[tabIndex] = true;
+      }
 
-      clearInterval(simTimer);
-      simTimer = setInterval(simStep, actualDelay);
+      i++;
+    }, delay);
+  }
 
-      updateStatus('Simulation started...');
-    }
-
-    function simStep() {
-      if (isPaused || simIdx >= routeCoords.length) return;
-
-      const pt = routeCoords[simIdx];
-      const prev = routeCoords[Math.max(0, simIdx - 1)];
-      simIdx++;
-
-      const course = calculateCourse(prev, pt);
-      const speed = variableStopIndices.includes(simIdx) ? 0 : Math.floor(Math.random() * 40) + 20;
-
-      simMarker.setLatLng([pt.lat, pt.lon]);
-      sendWS(pt.lat, pt.lon, speed, course);
-    }
-
-    function stopSimulation() {
-      clearInterval(simTimer);
-      updateStatus('Simulation stopped.');
-    }
-
-    function togglePause() {
-      isPaused = !isPaused;
-      updateStatus(isPaused ? 'Paused' : 'Resumed');
-    }
-
-    function sendWS(lat, lon, speed, course) {
-      if (ws.readyState !== WebSocket.OPEN) return;
-      const data = {
-        type: 'update',
-        data: {
-          imei: document.getElementById('imei').value,
-          lat, lon,
-          speed,
-          course,
-          datetime: new Date().toISOString(),
-          lastUpdate: new Date().toISOString()
-        }
-      };
-      ws.send(JSON.stringify(data));
-      updateStatus(`Sent: ${lat.toFixed(5)}, ${lon.toFixed(5)} | ${speed}km/h | ${course.toFixed(1)}°`);
-    }
-  </script>
+  function startSimulation() {
+    Object.values(simulationIntervals).forEach(clearInterval);
+    [1, 2].forEach(simulateVehicle);
+    updateStatus("Simulation started.");
+  }
+  initializeMap();
+  initializeUI(defaultAddresses);
+</script>
 </body>
 </html>
