@@ -204,9 +204,11 @@ const httpServer = http.createServer((req, res) => {
         res.writeHead(200, { 'Content-Type': 'text/html' });
         res.end(getHtmlContent());
     } else {
-        const filePath = path.join(__dirname, 'index.html');
+        const filePath = path.join(__dirname+, 'index.html');
+        console.log(filePath);
         fs.readFile(filePath, (err, data) => {
             if (err) {
+                console.log(err);
                 res.writeHead(500, { 'Content-Type': 'text/plain' });
                 res.end('Internal Server Error');
                 return;
