@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>GPS Simulator with Autocomplete</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <style>
+    html, body {
+      height: 100%;
+      margin: 0;
+      padding: 0;
+    }
+    #container {
+      display: flex;
+      height: 100%;
+      overflow: hidden;
+    }
+    #controls {
+      width: 300px;
+      padding: 10px;
+      background: #fff;
+      box-shadow: 2px 0 5px rgba(0, 0, 0, 0.2);
+      font-family: sans-serif;
+      overflow-y: auto;
+      box-sizing: border-box;
+    }
+    #map {
+      flex: 1;
+      height: 100%;
+    }
+    input, button {
+      width: 100%;
+      padding: 8px;
+      margin-bottom: 10px;
+      box-sizing: border-box;
+    }
+    .suggestions {
+      border: 1px solid #ccc;
+      max-height: 100px;
+      overflow-y: auto;
+    }
+    .suggestions div {
+      padding: 4px;
+      cursor: pointer;
+    }
+    .suggestions div:hover {
+      background: #eee;
+    }
+    #status {
+      font-size: 12px;
+      color: #444;
+      margin-top: 10px;
+    }
+  </style>
+</head>
+<body>
+  <div id="container">
+    <div id="controls">
+      <label>IMEI:</label>
+      <input id="imei" value="123456789012345" />
+
+      <label>Start Address:</label>
+      <input id="start-addr" autocomplete="off" />
+      <div id="start-suggestions" class="suggestions"></div>
+
+      <label>Destination Address:</label>
+      <input id="dest-addr" autocomplete="off" />
+      <div id="dest-suggestions" class="suggestions"></div>
+
+      <button onclick="fetchRoute()">Generate Route</button>
+      <button onclick="startSimulation()">Start Simulation</button>
+      <button onclick="stopSimulation()">Stop</button>
+      <div id="status">Idle.</div>
+    </div>
+    <div id="map"></div>
+  </div>
+
+  <script>
+    const map = L.map('map').setView([28.3949, 84.1240], 8);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19
+    }).addTo(map);
+
+    const ws = new WebSocket('ws://' + '103.90.84.153' + ':8081');
+    ws.onopen = () => updateStatus('WebSocket connected');
+    ws.onclose = () => updateStatus('WebSocket disconnected');
+
+    let startMarker, destMarker, routeLine, simMarker;
+    let routeCoords = [], simIdx = 0, simTimer;
+
+    function updateStatus(msg) {
+      document.getElementById('status').textContent = msg;
+    }
+
+    function setupAutocomplete(inputId, suggestionId) {
+      const input = document.getElementById(inputId);
+      const suggBox = document.getElementById(suggestionId);
+      let timeout = null;
+
+      input.addEventListener('input', () => {
+        clearTimeout(timeout);
+        const query = input.value.trim();
+        if (!query) {
+          suggBox.innerHTML = '';
+          return;
+        }
+
+        timeout = setTimeout(() => {
+          fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}`)
+            .then(res => res.json())
+            .then(results => {
+              suggBox.innerHTML = '';
+              results.slice(0, 5).forEach(loc => {
+                const div = document.createElement('div');
+                div.textContent = loc.display_name;
+                div.dataset.lat = loc.lat;
+                div.dataset.lon = loc.lon;
+                div.addEventListener('click', () => {
+                  input.value = loc.display_name;
+                  input.dataset.lat = loc.lat;
+                  input.dataset.lon = loc.lon;
+                  suggBox.innerHTML = '';
+                });
+                suggBox.appendChild(div);
+              });
+            });
+        }, 300);
+      });
+    }
+
+    setupAutocomplete('start-addr', 'start-suggestions');
+    setupAutocomplete('dest-addr', 'dest-suggestions');
+
+    function fetchRoute() {
+      const s = document.getElementById('start-addr').dataset;
+      const d = document.getElementById('dest-addr').dataset;
+      if (!s.lat || !d.lat) return updateStatus('Please select both addresses.');
+
+      const start = { lat: +s.lat, lon: +s.lon };
+      const dest = { lat: +d.lat, lon: +d.lon };
+
+      if (startMarker) map.removeLayer(startMarker);
+      if (destMarker) map.removeLayer(destMarker);
+      if (routeLine) map.removeLayer(routeLine);
+
+      startMarker = L.marker([start.lat, start.lon]).addTo(map).bindPopup('Start');
+      destMarker = L.marker([dest.lat, dest.lon]).addTo(map).bindPopup('Destination');
+      map.fitBounds([[start.lat, start.lon], [dest.lat, dest.lon]], { padding: [50, 50] });
+
+      updateStatus('Fetching route...');
+      fetch(`https://router.project-osrm.org/route/v1/driving/${start.lon},${start.lat};${dest.lon},${dest.lat}?overview=full&geometries=geojson`)
+        .then(res => res.json())
+        .then(data => {
+          routeCoords = data.routes[0].geometry.coordinates.map(c => ({ lat: c[1], lon: c[0] }));
+          routeLine = L.polyline(routeCoords, { color: 'blue', weight: 4 }).addTo(map);
+          updateStatus(`Route ready (${routeCoords.length} points)`);
+        })
+        .catch(() => updateStatus('Failed to get route.'));
+    }
+
+    function startSimulation() {
+      if (!routeCoords.length) return updateStatus('No route yet.');
+      if (simMarker) map.removeLayer(simMarker);
+      simMarker = L.marker([routeCoords[0].lat, routeCoords[0].lon]).addTo(map);
+      simIdx = 0;
+      simTimer = setInterval(simStep, 500);
+      updateStatus('Simulation started');
+    }
+
+    function simStep() {
+      if (simIdx >= routeCoords.length) {
+        clearInterval(simTimer);
+        return updateStatus('Simulation completed');
+      }
+      const pt = routeCoords[simIdx++];
+      simMarker.setLatLng([pt.lat, pt.lon]);
+      sendWS(pt.lat, pt.lon);
+    }
+
+    function stopSimulation() {
+      clearInterval(simTimer);
+      updateStatus('Simulation stopped');
+    }
+
+    function sendWS(lat, lon) {
+      if (ws.readyState !== WebSocket.OPEN) return;
+      const data = {
+        type: 'update',
+        data: {
+          imei: document.getElementById('imei').value,
+          lat, lon,
+          speed: 30,
+          course: 0,
+          datetime: new Date().toISOString(),
+          lastUpdate: new Date().toISOString()
+        }
+      };
+      ws.send(JSON.stringify(data));
+      updateStatus(`Sent: ${lat.toFixed(5)}, ${lon.toFixed(5)}`);
+    }
+  </script>
+</body>
+</html>
