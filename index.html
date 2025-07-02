@@ -1,22 +1,15 @@
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>GPS Simulator with Autocomplete</title>
+  <title>Enhanced GPS Simulator</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <style>
-    html, body {
-      height: 100%;
-      margin: 0;
-      padding: 0;
-    }
-    #container {
-      display: flex;
-      height: 100%;
-      overflow: hidden;
-    }
+    html, body { height: 100%; margin: 0; padding: 0; }
+    #container { display: flex; height: 100%; overflow: hidden; }
     #controls {
       width: 300px;
       padding: 10px;
@@ -26,15 +19,9 @@
       overflow-y: auto;
       box-sizing: border-box;
     }
-    #map {
-      flex: 1;
-      height: 100%;
-    }
+    #map { flex: 1; height: 100%; }
     input, button {
-      width: 100%;
-      padding: 8px;
-      margin-bottom: 10px;
-      box-sizing: border-box;
+      width: 100%; padding: 8px; margin-bottom: 10px; box-sizing: border-box;
     }
     .suggestions {
       border: 1px solid #ccc;
@@ -42,24 +29,19 @@
       overflow-y: auto;
     }
     .suggestions div {
-      padding: 4px;
-      cursor: pointer;
+      padding: 4px; cursor: pointer;
     }
     .suggestions div:hover {
       background: #eee;
     }
-    #status {
-      font-size: 12px;
-      color: #444;
-      margin-top: 10px;
-    }
+    #status { font-size: 12px; color: #444; margin-top: 10px; }
   </style>
 </head>
 <body>
   <div id="container">
     <div id="controls">
       <label>IMEI:</label>
-      <input id="imei" value="123456789012345" />
+      <input id="imei" value="868000001111111" />
 
       <label>Start Address:</label>
       <input id="start-addr" autocomplete="off" />
@@ -69,9 +51,17 @@
       <input id="dest-addr" autocomplete="off" />
       <div id="dest-suggestions" class="suggestions"></div>
 
+      <label>Push Delay (sec):</label>
+      <input id="delay" type="number" value="1" min="0.1" step="0.1" />
+
+      <label>Total Travel Time (sec):</label>
+      <input id="travelTime" type="number" value="60" min="1" />
+
       <button onclick="fetchRoute()">Generate Route</button>
-      <button onclick="startSimulation()">Start Simulation</button>
+      <button onclick="startSimulation()">Start</button>
+      <button onclick="togglePause()">Pause / Resume</button>
       <button onclick="stopSimulation()">Stop</button>
+
       <div id="status">Idle.</div>
     </div>
     <div id="map"></div>
@@ -79,16 +69,15 @@
 
   <script>
     const map = L.map('map').setView([28.3949, 84.1240], 8);
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      maxZoom: 19
-    }).addTo(map);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
 
     const ws = new WebSocket('ws://' + '103.90.84.153' + ':8081');
     ws.onopen = () => updateStatus('WebSocket connected');
     ws.onclose = () => updateStatus('WebSocket disconnected');
 
     let startMarker, destMarker, routeLine, simMarker;
-    let routeCoords = [], simIdx = 0, simTimer;
+    let routeCoords = [], simIdx = 0, simTimer, isPaused = false;
+    let variableStopIndices = [];
 
     function updateStatus(msg) {
       document.getElementById('status').textContent = msg;
@@ -102,10 +91,7 @@
       input.addEventListener('input', () => {
         clearTimeout(timeout);
         const query = input.value.trim();
-        if (!query) {
-          suggBox.innerHTML = '';
-          return;
-        }
+        if (!query) return suggBox.innerHTML = '';
 
         timeout = setTimeout(() => {
           fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}`)
@@ -117,12 +103,12 @@
                 div.textContent = loc.display_name;
                 div.dataset.lat = loc.lat;
                 div.dataset.lon = loc.lon;
-                div.addEventListener('click', () => {
+                div.onclick = () => {
                   input.value = loc.display_name;
                   input.dataset.lat = loc.lat;
                   input.dataset.lon = loc.lon;
                   suggBox.innerHTML = '';
-                });
+                };
                 suggBox.appendChild(div);
               });
             });
@@ -136,7 +122,7 @@
     function fetchRoute() {
       const s = document.getElementById('start-addr').dataset;
       const d = document.getElementById('dest-addr').dataset;
-      if (!s.lat || !d.lat) return updateStatus('Please select both addresses.');
+      if (!s.lat || !d.lat) return updateStatus('Select both addresses.');
 
       const start = { lat: +s.lat, lon: +s.lon };
       const dest = { lat: +d.lat, lon: +d.lon };
@@ -160,45 +146,76 @@
         .catch(() => updateStatus('Failed to get route.'));
     }
 
+    function calculateCourse(from, to) {
+      const dy = to.lat - from.lat;
+      const dx = to.lon - from.lon;
+      const angle = Math.atan2(dy, dx) * (180 / Math.PI);
+      return (angle + 360) % 360;
+    }
+
     function startSimulation() {
-      if (!routeCoords.length) return updateStatus('No route yet.');
+      if (!routeCoords.length) return updateStatus('No route loaded');
+      const delay = parseFloat(document.getElementById('delay').value) * 1000;
+      const totalTime = parseFloat(document.getElementById('travelTime').value);
+      const stepTime = (totalTime / routeCoords.length) * 1000;
+      const actualDelay = Math.max(delay, stepTime);
+
+      variableStopIndices = [];
+      for (let i = 3; i < routeCoords.length; i += Math.floor(Math.random() * 5) + 4) {
+        variableStopIndices.push(i);
+      }
+
+      simIdx = 0;
+      isPaused = false;
+
       if (simMarker) map.removeLayer(simMarker);
       simMarker = L.marker([routeCoords[0].lat, routeCoords[0].lon]).addTo(map);
-      simIdx = 0;
-      simTimer = setInterval(simStep, 500);
-      updateStatus('Simulation started');
+
+      clearInterval(simTimer);
+      simTimer = setInterval(simStep, actualDelay);
+
+      updateStatus('Simulation started...');
     }
 
     function simStep() {
-      if (simIdx >= routeCoords.length) {
-        clearInterval(simTimer);
-        return updateStatus('Simulation completed');
-      }
-      const pt = routeCoords[simIdx++];
+      if (isPaused || simIdx >= routeCoords.length) return;
+
+      const pt = routeCoords[simIdx];
+      const prev = routeCoords[Math.max(0, simIdx - 1)];
+      simIdx++;
+
+      const course = calculateCourse(prev, pt);
+      const speed = variableStopIndices.includes(simIdx) ? 0 : Math.floor(Math.random() * 40) + 20;
+
       simMarker.setLatLng([pt.lat, pt.lon]);
-      sendWS(pt.lat, pt.lon);
+      sendWS(pt.lat, pt.lon, speed, course);
     }
 
     function stopSimulation() {
       clearInterval(simTimer);
-      updateStatus('Simulation stopped');
+      updateStatus('Simulation stopped.');
     }
 
-    function sendWS(lat, lon) {
+    function togglePause() {
+      isPaused = !isPaused;
+      updateStatus(isPaused ? 'Paused' : 'Resumed');
+    }
+
+    function sendWS(lat, lon, speed, course) {
       if (ws.readyState !== WebSocket.OPEN) return;
       const data = {
         type: 'update',
         data: {
           imei: document.getElementById('imei').value,
           lat, lon,
-          speed: 30,
-          course: 0,
+          speed,
+          course,
           datetime: new Date().toISOString(),
           lastUpdate: new Date().toISOString()
         }
       };
       ws.send(JSON.stringify(data));
-      updateStatus(`Sent: ${lat.toFixed(5)}, ${lon.toFixed(5)}`);
+      updateStatus(`Sent: ${lat.toFixed(5)}, ${lon.toFixed(5)} | ${speed}km/h | ${course.toFixed(1)}°`);
     }
   </script>
 </body>
