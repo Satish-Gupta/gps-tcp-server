@@ -214,11 +214,12 @@ const httpServer = http.createServer((req, res) => {
             res.writeHead(200, { 'Content-Type': 'text/html' });
             res.end(data);
         });
-    } else {
-        // Handle 404 for other routes
-        res.writeHead(404, { 'Content-Type': 'text/plain' });
-        res.end('404 Not Found');
     }
+    // else {
+    //     // Handle 404 for other routes
+    //     res.writeHead(404, { 'Content-Type': 'text/plain' });
+    //     res.end('404 Not Found');
+    // }
 });
 
 const wss = new WebSocket.Server({ server: httpServer });
