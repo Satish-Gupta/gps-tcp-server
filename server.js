@@ -25,7 +25,8 @@
  * 3. Then send a location packet (this example is for Ghorahi, Nepal):
  * echo "78782212100C1A0F2E28C802E3A15D05282564000C00010002AE2D0d0a" | xxd -r -p | nc localhost 8080
  */
-
+const fs = require('fs');
+const path = require('path');
 const net = require('net');
 const http = require('http');
 const WebSocket = require('ws');
@@ -197,8 +198,27 @@ function parseDatetime(buffer) {
 
 const httpServer = http.createServer((req, res) => {
     // Serve the main HTML page
-    res.writeHead(200, { 'Content-Type': 'text/html' });
-    res.end(getHtmlContent());
+    
+    // Only serve the HTML file at a specific path, e.g., "/"
+    if (req.url === '/' || req.url === '/index.html') {
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        res.end(getHtmlContent());
+    } else {
+        const filePath = path.join(__dirname, 'index.html');
+        fs.readFile(filePath, (err, data) => {
+            if (err) {
+                res.writeHead(500, { 'Content-Type': 'text/plain' });
+                res.end('Internal Server Error');
+                return;
+            }
+            res.writeHead(200, { 'Content-Type': 'text/html' });
+            res.end(data);
+        });
+    } else {
+        // Handle 404 for other routes
+        res.writeHead(404, { 'Content-Type': 'text/plain' });
+        res.end('404 Not Found');
+    }
 });
 
 const wss = new WebSocket.Server({ server: httpServer });
