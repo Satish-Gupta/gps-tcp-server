@@ -94,8 +94,8 @@ const broadcastInProgress = new Map(); // Key: IMEI, Value: boolean (true if bro
 const unbroadcastedMessages = new Map(); // Key: IMEI, Value: count
 const messageCounters = new Map(); // Key: IMEI, Value: total message count
 
-// Helper function to generate message ID and prefix
-function generateMessageId(imei) {
+// Helper function to generate unique message ID and queue ID
+function generateMessageIds(imei) {
     const currentCount = (messageCounters.get(imei) || 0) + 1;
     messageCounters.set(imei, currentCount);
     
@@ -103,7 +103,12 @@ function generateMessageId(imei) {
     const imeiSuffix = imei.slice(-4);
     const messagePrefix = `${imeiSuffix}-${messageId}`;
     
-    return { messageId, messagePrefix, totalCount: currentCount };
+    // Generate unique queue ID (timestamp + random)
+    const timestamp = Date.now().toString(36);
+    const random = Math.random().toString(36).substr(2, 4);
+    const queueId = `${timestamp}-${random}`;
+    
+    return { messageId, messagePrefix, queueId, totalCount: currentCount };
 }
 
 // Helper function to format time in NPT format (5:30:33 PM JUN-19)
@@ -184,12 +189,13 @@ function initializeQueue(imei) {
 function enqueueMessage(imei, trackerData) {
     initializeQueue(imei);
 
-    // Generate message ID and prefix
-    const { messageId, messagePrefix, totalCount } = generateMessageId(imei);
+    // Generate message ID and queue ID
+    const { messageId, messagePrefix, queueId, totalCount } = generateMessageIds(imei);
     
-    // Add message ID to tracker data
+    // Add message ID and queue ID to tracker data
     trackerData.messageId = messageId;
     trackerData.messagePrefix = messagePrefix;
+    trackerData.queueId = queueId;
 
     const queue = messageQueues.get(imei);
     queue.push(trackerData);
@@ -197,9 +203,10 @@ function enqueueMessage(imei, trackerData) {
     // Update unbroadcasted count
     unbroadcastedMessages.set(imei, queue.length);
 
-    Logger.debug('QUEUE', `Message enqueued [${messagePrefix}]`, {
+    Logger.debug('QUEUE', `Message enqueued [${messagePrefix}] [Q:${queueId}]`, {
         imei,
         messageId,
+        queueId,
         queueLength: queue.length,
         unbroadcastedCount: unbroadcastedMessages.get(imei),
         totalMessageCount: totalCount
@@ -519,11 +526,9 @@ wss.on('connection', ws => {
                 const currentCount = unbroadcastedMessages.get(data.data.imei) || 0;
                 unbroadcastedMessages.set(data.data.imei, currentCount + 1);
 
-                const messagePrefix = data.data.messagePrefix || `${data.data.imei.slice(-4)}-????`;
-                Logger.info('WebSocket', `Tracker data received [${messagePrefix}]${timestampTable}`, {
+                Logger.info('WebSocket', `Tracker data received${timestampTable}`, {
                     imei: data.data.imei,
-                    unbroadcastedCount: unbroadcastedMessages.get(data.data.imei),
-                    totalMessageCount: messageCounters.get(data.data.imei) || 0
+                    unbroadcastedCount: unbroadcastedMessages.get(data.data.imei)
                 });
 
                 broadcastToWebClients(data.data);
@@ -638,11 +643,9 @@ async function broadcastToWebClientsQueued(data) {
             // Create timestamp table for comparison
             const timestampTable = createTimestampTable(loggedTime, payloadTime, receivedTime);
 
-            const messagePrefix = data.messagePrefix || `${data.imei.slice(-4)}-????`;
-            Logger.info('WebSocket', `Broadcast completed [${messagePrefix}]${timestampTable}`, {
+            Logger.info('WebSocket', `Broadcast completed${timestampTable}`, {
                 imei: data.imei,
                 unbroadcastedCount: unbroadcastedMessages.get(data.imei) || 0,
-                totalMessageCount: messageCounters.get(data.imei) || 0,
                 broadcastResults: { successCount, errorCount }
             });
 
