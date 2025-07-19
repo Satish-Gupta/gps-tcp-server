@@ -40,7 +40,7 @@ const LOG_LEVELS = {
     DEBUG: 3
 };
 
-const LOG_LEVEL = LOG_LEVELS[process.env.LOG_LEVEL?.toUpperCase()] ?? LOG_LEVELS.INFO;
+const LOG_LEVEL = LOG_LEVELS[process.env.LOG_LEVEL?.toUpperCase()] ?? LOG_LEVELS.DEBUG;
 const LOG_FORMAT = process.env.LOG_FORMAT || 'console'; // 'console' or 'json'
 
 class Logger {
