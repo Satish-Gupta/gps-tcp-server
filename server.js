@@ -1,3 +1,4 @@
+
 /**
  * Node.js GPS Tracker Server (GT06 Protocol)
  * * This script creates a complete, single-file server to track GPS devices that use the GT06 protocol.
@@ -31,6 +32,55 @@ const net = require('net');
 const http = require('http');
 const WebSocket = require('ws');
 
+// --- LOGGING CONFIGURATION ---
+const LOG_LEVELS = {
+    ERROR: 0,
+    WARN: 1,
+    INFO: 2,
+    DEBUG: 3
+};
+
+const LOG_LEVEL = LOG_LEVELS[process.env.LOG_LEVEL?.toUpperCase()] ?? LOG_LEVELS.INFO;
+const LOG_FORMAT = process.env.LOG_FORMAT || 'console'; // 'console' or 'json'
+
+class Logger {
+    static log(level, component, message, metadata = {}) {
+        if (LOG_LEVELS[level] > LOG_LEVEL) return;
+        
+        const timestamp = new Date().toISOString();
+        const logEntry = {
+            timestamp,
+            level,
+            component,
+            message,
+            ...metadata
+        };
+
+        if (LOG_FORMAT === 'json') {
+            console.log(JSON.stringify(logEntry));
+        } else {
+            const metaStr = Object.keys(metadata).length > 0 ? ` ${JSON.stringify(metadata)}` : '';
+            console.log(`[${timestamp}] [${level}] [${component}] ${message}${metaStr}`);
+        }
+    }
+
+    static error(component, message, metadata = {}) {
+        this.log('ERROR', component, message, metadata);
+    }
+
+    static warn(component, message, metadata = {}) {
+        this.log('WARN', component, message, metadata);
+    }
+
+    static info(component, message, metadata = {}) {
+        this.log('INFO', component, message, metadata);
+    }
+
+    static debug(component, message, metadata = {}) {
+        this.log('DEBUG', component, message, metadata);
+    }
+}
+
 // --- CONFIGURATION ---
 const TCP_PORT = 5000; // Port for GPS trackers
 const HTTP_PORT = 8081; // Port for the web interface
@@ -38,22 +88,94 @@ const HTTP_PORT = 8081; // Port for the web interface
 // In-memory storage for tracker data
 const trackers = new Map(); // Key: IMEI, Value: { lat, lon, speed, course, lastUpdate, ... }
 
+// Helper function to format time in NPT format (5:30:33 PM JUN-19)
+function formatNPTTime(date) {
+    if (!date) return 'N/A';
+    
+    // Convert to NPT (UTC+5:45)
+    const nptOffset = 5.75 * 60 * 60 * 1000; // 5 hours 45 minutes in milliseconds
+    const nptDate = new Date(date.getTime() + nptOffset);
+    
+    const months = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 
+                   'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
+    
+    const hours = nptDate.getUTCHours();
+    const minutes = nptDate.getUTCMinutes().toString().padStart(2, '0');
+    const seconds = nptDate.getUTCSeconds().toString().padStart(2, '0');
+    const ampm = hours >= 12 ? 'PM' : 'AM';
+    const displayHours = hours % 12 || 12;
+    
+    const month = months[nptDate.getUTCMonth()];
+    const day = nptDate.getUTCDate().toString().padStart(2, '0');
+    
+    return `${displayHours}:${minutes}:${seconds} ${ampm} ${month}-${day}`;
+}
+
+// Helper function to create tabular timestamp display
+function createTimestampTable(loggedTime, payloadTime, receivedTime) {
+    const loggedNPT = formatNPTTime(loggedTime);
+    const payloadNPT = formatNPTTime(payloadTime);
+    const receivedNPT = formatNPTTime(receivedTime);
+    
+    return `
+┌─────────────────────┬─────────────────────┬─────────────────────┐
+│ Logged Time         │ Payload Time        │ Server Received     │
+├─────────────────────┼─────────────────────┼─────────────────────┤
+│ ${loggedNPT.padEnd(19)} │ ${payloadNPT.padEnd(19)} │ ${receivedNPT.padEnd(19)} │
+└─────────────────────┴─────────────────────┴─────────────────────┘`;
+}
+
+// Helper function to generate tracker statistics
+function getTrackerStats() {
+    const stats = {
+        totalTrackers: trackers.size,
+        trackersByImei: {},
+        latestDataTime: null
+    };
+    
+    let latestTimestamp = 0;
+    
+    for (const [imei, data] of trackers.entries()) {
+        const lastUpdateTime = data.lastUpdate ? new Date(data.lastUpdate).getTime() : 0;
+        
+        stats.trackersByImei[imei] = {
+            hasLocationData: !!(data.lat && data.lon),
+            lastUpdate: data.lastUpdate,
+            status: data.status || 'active'
+        };
+        
+        if (lastUpdateTime > latestTimestamp) {
+            latestTimestamp = lastUpdateTime;
+            stats.latestDataTime = data.lastUpdate;
+        }
+    }
+    
+    return stats;
+}
+
 // --- 1. TCP SERVER FOR GPS TRACKERS ---
 
 const tcpServer = net.createServer(socket => {
     const clientAddress = `${socket.remoteAddress}:${socket.remotePort}`;
-    console.log(`[TCP] New connection from: ${clientAddress}`);
+    Logger.info('TCP', 'New connection established', { clientAddress });
 
     socket.on('data', data => {
         try {
-            console.log(`[TCP] Received data from ${clientAddress}: ${data.toString('hex')}`);
+            Logger.debug('TCP', 'Received raw data', { 
+                clientAddress, 
+                dataLength: data.length,
+                hexData: data.toString('hex')
+            });
             
             // A tracker can send multiple packets in one chunk, so we need to handle them all.
             let offset = 0;
             while (offset < data.length) {
                 const packet = parseGT06Data(data.slice(offset));
                 if (!packet) {
-                    console.log(`[TCP] Could not parse packet from ${clientAddress}. Skipping rest of data.`);
+                    Logger.warn('TCP', 'Failed to parse packet, skipping remaining data', { 
+                        clientAddress,
+                        remainingBytes: data.length - offset
+                    });
                     break;
                 }
 
@@ -63,15 +185,35 @@ const tcpServer = net.createServer(socket => {
                     if (!trackers.has(packet.imei)) {
                          trackers.set(packet.imei, { imei: packet.imei, history: [] });
                     }
-                    console.log(`[TCP] Tracker with IMEI ${packet.imei} logged in.`);
+                    Logger.info('TCP', 'Tracker login successful', { 
+                        imei: packet.imei, 
+                        clientAddress,
+                        isNewTracker: !trackers.has(packet.imei)
+                    });
                     
                     // Respond to the tracker to acknowledge login
                     const response = Buffer.from('787805010001d9dc0d0a', 'hex'); // Standard GT06 login response
                     socket.write(response);
-                    console.log(`[TCP] Sent login response to ${packet.imei}`);
+                    Logger.debug('TCP', 'Login response sent', { imei: packet.imei });
 
                 } else if (packet.type === 'location' && socket.imei) {
-                    console.log(`[TCP] Received location data for IMEI ${socket.imei}:`, packet);
+                    const loggedTime = new Date(); // Time when we're logging this
+                    const payloadTime = packet.datetime; // Time from GPS payload
+                    const receivedTime = new Date(); // Time when server received the data
+                    
+                    // Create timestamp table for comparison
+                    const timestampTable = createTimestampTable(loggedTime, payloadTime, receivedTime);
+                    
+                    Logger.info('TCP', `Location data received for IMEI ${socket.imei}${timestampTable}`, { 
+                        imei: socket.imei,
+                        lat: packet.lat,
+                        lon: packet.lon,
+                        speed: packet.speed,
+                        course: packet.course,
+                        satellites: packet.satellites,
+                        realtimeGps: packet.realtimeGps
+                    });
+                    
                     const trackerData = {
                         imei: socket.imei,
                         lat: packet.lat,
@@ -79,38 +221,60 @@ const tcpServer = net.createServer(socket => {
                         speed: packet.speed,
                         course: packet.course,
                         datetime: packet.datetime,
-                        lastUpdate: new Date().toISOString()
+                        lastUpdate: new Date().toISOString(),
+                        receivedTime: receivedTime.toISOString()
                     };
                     trackers.set(socket.imei, trackerData);
                     // Broadcast the new location to all connected web clients
                     broadcastToWebClients(trackerData);
 
                 } else if (packet.type === 'heartbeat' && socket.imei) {
-                    console.log(`[TCP] Received heartbeat from IMEI ${socket.imei}.`);
+                    Logger.debug('TCP', 'Heartbeat received', { imei: socket.imei });
                     const response = Buffer.from('787805130001d9dc0d0a', 'hex'); // Standard GT06 heartbeat response
                     socket.write(response);
+                } else if (packet.type === 'unknown') {
+                    Logger.warn('TCP', 'Unknown packet type received', {
+                        clientAddress,
+                        imei: socket.imei,
+                        protocolNumber: packet.protocol
+                    });
                 }
                 
                 offset += packet.length;
             }
         } catch (err) {
-            console.error(`[TCP] Error processing data from ${clientAddress}:`, err);
+            Logger.error('TCP', 'Error processing data', { 
+                clientAddress,
+                imei: socket.imei,
+                error: err.message,
+                stack: err.stack
+            });
         }
     });
 
     socket.on('close', () => {
-        console.log(`[TCP] Connection from ${clientAddress} closed.`);
+        Logger.info('TCP', 'Connection closed', { 
+            clientAddress,
+            imei: socket.imei 
+        });
+        
         if (socket.imei) {
              const trackerData = trackers.get(socket.imei);
              if (trackerData) {
                  trackerData.status = 'offline';
                  broadcastToWebClients(trackerData);
+                 Logger.info('TCP', 'Tracker marked as offline', { imei: socket.imei });
              }
         }
     });
 
     socket.on('error', err => {
-        console.error(`[TCP] Connection error from ${clientAddress}:`, err);
+        Logger.error('TCP', 'Socket error', { 
+            clientAddress,
+            imei: socket.imei,
+            error: err.message,
+            code: err.code
+        });
     });
 });
 
@@ -197,67 +361,126 @@ function parseDatetime(buffer) {
 // --- 3. HTTP AND WEBSOCKET SERVER ---
 
 const httpServer = http.createServer((req, res) => {
-    // Serve the main HTML page
+    Logger.debug('HTTP', 'Request received', { 
+        method: req.method, 
+        url: req.url,
+        userAgent: req.headers['user-agent']
+    });
     
-    // Only serve the HTML file at a specific path, e.g., "/"
     if (req.url === '/' || req.url === '/index.html') {
         res.writeHead(200, { 'Content-Type': 'text/html' });
         res.end(getHtmlContent());
+        Logger.debug('HTTP', 'Served embedded HTML content');
     } else {
         const filePath = path.join(__dirname, 'index.html');
-        console.log(filePath);
         fs.readFile(filePath, (err, data) => {
             if (err) {
-                console.log(err);
+                Logger.error('HTTP', 'Failed to read index.html file', { 
+                    filePath,
+                    error: err.message 
+                });
                 res.writeHead(500, { 'Content-Type': 'text/plain' });
                 res.end('Internal Server Error');
                 return;
             }
             res.writeHead(200, { 'Content-Type': 'text/html' });
             res.end(data);
+            Logger.debug('HTTP', 'Served index.html file', { filePath });
         });
     }
-    // else {
-    //     // Handle 404 for other routes
-    //     res.writeHead(404, { 'Content-Type': 'text/plain' });
-    //     res.end('404 Not Found');
-    // }
 });
 
 const wss = new WebSocket.Server({ server: httpServer });
 
 wss.on('connection', ws => {
-    console.log('[WS] New web client connected.');
+    Logger.info('WebSocket', 'New web client connected');
+    
     // Send the current state of all trackers to the newly connected client
-    ws.send(JSON.stringify({ type: 'initial_state', data: Array.from(trackers.values()) }));
-     ws.on('message', message => {
+    const initialData = Array.from(trackers.values());
+    ws.send(JSON.stringify({ type: 'initial_state', data: initialData }));
+    Logger.debug('WebSocket', 'Initial state sent to client', { trackerCount: initialData.length });
+    
+    ws.on('message', message => {
         try {
             const data = JSON.parse(message);
-            console.log('[WS] Received message from client:', data);
+            Logger.debug('WebSocket', 'Message received from client', { 
+                messageType: data.type,
+                hasData: !!data.data 
+            });
 
             if (data.type === 'update' || data.type == 'initial_state') {
                 trackers.set(data.data.imei, data.data);
-
-                // Broadcast to all clients
+                
+                // Log tracker statistics after receiving data
+                const stats = getTrackerStats();
+                Logger.info('WebSocket', 'Tracker data received - current state', {
+                    totalTrackers: stats.totalTrackers,
+                    trackersByImei: stats.trackersByImei,
+                    latestDataTime: stats.latestDataTime
+                });
+                
                 broadcastToWebClients(data.data);
             }
-        } catch (e) {
-            console.error('[WS] Error parsing client message:', e);
+        } catch (err) {
+            Logger.error('WebSocket', 'Error parsing client message', { 
+                error: err.message,
+                rawMessage: message.toString()
+            });
         }
     });
+    
     ws.on('close', () => {
-        console.log('[WS] Web client disconnected.');
+        Logger.info('WebSocket', 'Web client disconnected');
+    });
+    
+    ws.on('error', err => {
+        Logger.error('WebSocket', 'WebSocket connection error', { 
+            error: err.message,
+            code: err.code 
+        });
     });
 });
 
 function broadcastToWebClients(data) {
-    console.log('[WS] Broadcasting update:', data);
+    Logger.debug('WebSocket', 'Broadcasting update to clients', { 
+        imei: data.imei,
+        clientCount: wss.clients.size,
+        hasLocationData: !!(data.lat && data.lon)
+    });
+    
     const message = JSON.stringify({type: 'update', data: data});
+    let successCount = 0;
+    let errorCount = 0;
+    
     wss.clients.forEach(client => {
         if (client.readyState === WebSocket.OPEN) {
-            client.send(message);
+            try {
+                client.send(message);
+                successCount++;
+            } catch (err) {
+                errorCount++;
+                Logger.error('WebSocket', 'Failed to send message to client', { 
+                    error: err.message 
+                });
+            }
         }
     });
+    
+    // Log tracker statistics after broadcasting
+    const stats = getTrackerStats();
+    Logger.info('WebSocket', 'Broadcast completed - current tracker state', {
+        totalTrackers: stats.totalTrackers,
+        trackersByImei: stats.trackersByImei,
+        latestDataTime: stats.latestDataTime,
+        broadcastResults: { successCount, errorCount }
+    });
+    
+    if (errorCount > 0) {
+        Logger.warn('WebSocket', 'Broadcast completed with errors', { 
+            successCount, 
+            errorCount 
+        });
+    }
 }
 
 function getHtmlContent() {
@@ -404,9 +627,9 @@ function getHtmlContent() {
 // --- START SERVERS ---
 
 tcpServer.listen(TCP_PORT, () => {
-    console.log(`[INFO] TCP server for GPS trackers listening on port ${TCP_PORT}`);
+    Logger.info('SERVER', 'TCP server started', { port: TCP_PORT, service: 'GPS trackers' });
 });
 
 httpServer.listen(HTTP_PORT, () => {
-    console.log(`[INFO] HTTP web server listening on http://localhost:${HTTP_PORT}`);
+    Logger.info('SERVER', 'HTTP server started', { port: HTTP_PORT, url: `http://localhost:${HTTP_PORT}` });
 });
