@@ -46,8 +46,8 @@ const LOG_FORMAT = process.env.LOG_FORMAT || 'console'; // 'console' or 'json'
 class Logger {
     static log(level, component, message, metadata = {}) {
         if (LOG_LEVELS[level] > LOG_LEVEL) return;
-        
-        const timestamp = new Date().toISOString();
+
+        const timestamp = formatNPTTime(new Date());
         const logEntry = {
             timestamp,
             level,
@@ -88,26 +88,31 @@ const HTTP_PORT = 8081; // Port for the web interface
 // In-memory storage for tracker data
 const trackers = new Map(); // Key: IMEI, Value: { lat, lon, speed, course, lastUpdate, ... }
 
+// Message queuing system to prevent data loss
+const messageQueues = new Map(); // Key: IMEI, Value: Array of pending messages
+const broadcastInProgress = new Map(); // Key: IMEI, Value: boolean (true if broadcast in progress)
+const unbroadcastedMessages = new Map(); // Key: IMEI, Value: count
+
 // Helper function to format time in NPT format (5:30:33 PM JUN-19)
 function formatNPTTime(date) {
     if (!date) return 'N/A';
-    
+
     // Convert to NPT (UTC+5:45)
     const nptOffset = 5.75 * 60 * 60 * 1000; // 5 hours 45 minutes in milliseconds
     const nptDate = new Date(date.getTime() + nptOffset);
-    
-    const months = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 
-                   'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
-    
+
+    const months = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN',
+        'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
+
     const hours = nptDate.getUTCHours();
     const minutes = nptDate.getUTCMinutes().toString().padStart(2, '0');
     const seconds = nptDate.getUTCSeconds().toString().padStart(2, '0');
     const ampm = hours >= 12 ? 'PM' : 'AM';
     const displayHours = hours % 12 || 12;
-    
+
     const month = months[nptDate.getUTCMonth()];
     const day = nptDate.getUTCDate().toString().padStart(2, '0');
-    
+
     return `${displayHours}:${minutes}:${seconds} ${ampm} ${month}-${day}`;
 }
 
@@ -116,7 +121,7 @@ function createTimestampTable(loggedTime, payloadTime, receivedTime) {
     const loggedNPT = formatNPTTime(loggedTime);
     const payloadNPT = formatNPTTime(payloadTime);
     const receivedNPT = formatNPTTime(receivedTime);
-    
+
     return `
 ┌─────────────────────┬─────────────────────┬─────────────────────┐
 │ Logged Time         │ Payload Time        │ Server Received     │
@@ -132,25 +137,101 @@ function getTrackerStats() {
         trackersByImei: {},
         latestDataTime: null
     };
-    
+
     let latestTimestamp = 0;
-    
+
     for (const [imei, data] of trackers.entries()) {
         const lastUpdateTime = data.lastUpdate ? new Date(data.lastUpdate).getTime() : 0;
-        
+
         stats.trackersByImei[imei] = {
             hasLocationData: !!(data.lat && data.lon),
             lastUpdate: data.lastUpdate,
             status: data.status || 'active'
         };
-        
+
         if (lastUpdateTime > latestTimestamp) {
             latestTimestamp = lastUpdateTime;
             stats.latestDataTime = data.lastUpdate;
         }
     }
-    
+
     return stats;
+}
+
+// Message queue management functions
+function initializeQueue(imei) {
+    if (!messageQueues.has(imei)) {
+        messageQueues.set(imei, []);
+        broadcastInProgress.set(imei, false);
+        unbroadcastedMessages.set(imei, 0);
+        Logger.debug('QUEUE', 'Initialized message queue', { imei });
+    }
+}
+
+function enqueueMessage(imei, trackerData) {
+    initializeQueue(imei);
+
+    const queue = messageQueues.get(imei);
+    queue.push(trackerData);
+
+    // Update unbroadcasted count
+    unbroadcastedMessages.set(imei, queue.length);
+
+    Logger.debug('QUEUE', 'Message enqueued', {
+        imei,
+        queueLength: queue.length,
+        unbroadcastedCount: unbroadcastedMessages.get(imei)
+    });
+
+    // Process queue if not already in progress
+    processMessageQueue(imei);
+}
+
+async function processMessageQueue(imei) {
+    // Check if broadcast is already in progress for this IMEI
+    if (broadcastInProgress.get(imei)) {
+        Logger.debug('QUEUE', 'Broadcast already in progress, skipping', { imei });
+        return;
+    }
+
+    const queue = messageQueues.get(imei);
+    if (!queue || queue.length === 0) {
+        Logger.debug('QUEUE', 'Queue is empty, nothing to process', { imei });
+        return;
+    }
+
+    // Mark broadcast as in progress
+    broadcastInProgress.set(imei, true);
+
+    try {
+        while (queue.length > 0) {
+            const trackerData = queue.shift(); // Get first message from queue
+
+            // Update tracker state with latest data
+            trackers.set(imei, trackerData);
+
+            Logger.debug('QUEUE', 'Processing queued message', {
+                imei,
+                remainingInQueue: queue.length
+            });
+
+            // Broadcast the message
+            await broadcastToWebClientsQueued(trackerData);
+
+            // Update unbroadcasted count
+            unbroadcastedMessages.set(imei, queue.length);
+        }
+    } catch (error) {
+        Logger.error('QUEUE', 'Error processing message queue', {
+            imei,
+            error: error.message,
+            stack: error.stack
+        });
+    } finally {
+        // Mark broadcast as completed
+        broadcastInProgress.set(imei, false);
+        Logger.debug('QUEUE', 'Queue processing completed', { imei });
+    }
 }
 
 // --- 1. TCP SERVER FOR GPS TRACKERS ---
@@ -161,18 +242,18 @@ const tcpServer = net.createServer(socket => {
 
     socket.on('data', data => {
         try {
-            Logger.debug('TCP', 'Received raw data', { 
-                clientAddress, 
+            Logger.debug('TCP', 'Received raw data', {
+                clientAddress,
                 dataLength: data.length,
                 hexData: data.toString('hex')
             });
-            
+
             // A tracker can send multiple packets in one chunk, so we need to handle them all.
             let offset = 0;
             while (offset < data.length) {
                 const packet = parseGT06Data(data.slice(offset));
                 if (!packet) {
-                    Logger.warn('TCP', 'Failed to parse packet, skipping remaining data', { 
+                    Logger.warn('TCP', 'Failed to parse packet, skipping remaining data', {
                         clientAddress,
                         remainingBytes: data.length - offset
                     });
@@ -183,28 +264,21 @@ const tcpServer = net.createServer(socket => {
                     // Associate IMEI with this socket connection
                     socket.imei = packet.imei;
                     if (!trackers.has(packet.imei)) {
-                         trackers.set(packet.imei, { imei: packet.imei, history: [] });
+                        trackers.set(packet.imei, { imei: packet.imei, history: [] });
                     }
-                    Logger.info('TCP', 'Tracker login successful', { 
-                        imei: packet.imei, 
+                    Logger.info('TCP', 'Tracker login successful', {
+                        imei: packet.imei,
                         clientAddress,
                         isNewTracker: !trackers.has(packet.imei)
                     });
-                    
+
                     // Respond to the tracker to acknowledge login
                     const response = Buffer.from('787805010001d9dc0d0a', 'hex'); // Standard GT06 login response
                     socket.write(response);
                     Logger.debug('TCP', 'Login response sent', { imei: packet.imei });
 
                 } else if (packet.type === 'location' && socket.imei) {
-                    const loggedTime = new Date(); // Time when we're logging this
-                    const payloadTime = packet.datetime; // Time from GPS payload
-                    const receivedTime = new Date(); // Time when server received the data
-                    
-                    // Create timestamp table for comparison
-                    const timestampTable = createTimestampTable(loggedTime, payloadTime, receivedTime);
-                    
-                    Logger.info('TCP', `Location data received for IMEI ${socket.imei}${timestampTable}`, { 
+                    Logger.info('TCP', 'Location data received', {
                         imei: socket.imei,
                         lat: packet.lat,
                         lon: packet.lon,
@@ -213,7 +287,8 @@ const tcpServer = net.createServer(socket => {
                         satellites: packet.satellites,
                         realtimeGps: packet.realtimeGps
                     });
-                    
+
+                    const receivedTime = new Date(); // Time when server received the data
                     const trackerData = {
                         imei: socket.imei,
                         lat: packet.lat,
@@ -224,9 +299,9 @@ const tcpServer = net.createServer(socket => {
                         lastUpdate: new Date().toISOString(),
                         receivedTime: receivedTime.toISOString()
                     };
-                    trackers.set(socket.imei, trackerData);
-                    // Broadcast the new location to all connected web clients
-                    broadcastToWebClients(trackerData);
+
+                    // Enqueue message instead of direct broadcast to prevent data loss
+                    enqueueMessage(socket.imei, trackerData);
 
                 } else if (packet.type === 'heartbeat' && socket.imei) {
                     Logger.debug('TCP', 'Heartbeat received', { imei: socket.imei });
@@ -239,11 +314,11 @@ const tcpServer = net.createServer(socket => {
                         protocolNumber: packet.protocol
                     });
                 }
-                
+
                 offset += packet.length;
             }
         } catch (err) {
-            Logger.error('TCP', 'Error processing data', { 
+            Logger.error('TCP', 'Error processing data', {
                 clientAddress,
                 imei: socket.imei,
                 error: err.message,
@@ -253,23 +328,23 @@ const tcpServer = net.createServer(socket => {
     });
 
     socket.on('close', () => {
-        Logger.info('TCP', 'Connection closed', { 
+        Logger.info('TCP', 'Connection closed', {
             clientAddress,
-            imei: socket.imei 
+            imei: socket.imei
         });
-        
+
         if (socket.imei) {
-             const trackerData = trackers.get(socket.imei);
-             if (trackerData) {
-                 trackerData.status = 'offline';
-                 broadcastToWebClients(trackerData);
-                 Logger.info('TCP', 'Tracker marked as offline', { imei: socket.imei });
-             }
+            const trackerData = trackers.get(socket.imei);
+            if (trackerData) {
+                trackerData.status = 'offline';
+                broadcastToWebClients(trackerData);
+                Logger.info('TCP', 'Tracker marked as offline', { imei: socket.imei });
+            }
         }
     });
 
     socket.on('error', err => {
-        Logger.error('TCP', 'Socket error', { 
+        Logger.error('TCP', 'Socket error', {
             clientAddress,
             imei: socket.imei,
             error: err.message,
@@ -279,13 +354,13 @@ const tcpServer = net.createServer(socket => {
 });
 
 function decodeImeiFromBcd(hex) {
-  let imei = '';
-  for (let i = 0; i < hex.length; i += 2) {
-    const byte = hex.substr(i, 2);
-    imei += byte[0];
-    if (byte[1].toLowerCase() !== 'f') imei += byte[1];
-  }
-  return imei.slice(0, 15);
+    let imei = '';
+    for (let i = 0; i < hex.length; i += 2) {
+        const byte = hex.substr(i, 2);
+        imei += byte[0];
+        if (byte[1].toLowerCase() !== 'f') imei += byte[1];
+    }
+    return imei.slice(0, 15);
 }
 // --- 2. GT06 PROTOCOL PARSER ---
 
@@ -313,21 +388,21 @@ function parseGT06Data(buffer) {
             const gpsInfo = buffer.readUInt8(10);
             // gpsInfo: bit 7-4 is number of satellites, bit 3 is gps positioning status, bit 2-0 is length of lat/lon
             packet.satellites = gpsInfo >> 4;
-            
+
             // Latitude (Big Endian, signed)
             let lat = buffer.readInt32BE(11);
             // if((buffer.readUInt8(16) & 0x08) === 0){ // Check South/North bit in course/status
             //     lat = -lat; // South
             // }
             packet.lat = lat / 1800000.0;
-            
+
             // Longitude (Big Endian, signed)
             let lon = buffer.readInt32BE(15);
             //  if((buffer.readUInt8(16) & 0x04) !== 0){ // Check East/West bit
             //     lon = -lon; // West
             // }
             packet.lon = lon / 1800000.0;
-            
+
             packet.speed = buffer.readUInt8(19);
             const courseStatus = buffer.readUInt16BE(20);
             packet.course = courseStatus & 0x03FF; // 10 bits for course
@@ -336,9 +411,9 @@ function parseGT06Data(buffer) {
             return packet;
 
         case 0x13: // Heartbeat (Status) Packet
-             packet.type = 'heartbeat';
-             // You can parse terminal info byte (at index 4) if needed
-             return packet;
+            packet.type = 'heartbeat';
+            // You can parse terminal info byte (at index 4) if needed
+            return packet;
 
         default:
             packet.type = 'unknown';
@@ -361,12 +436,12 @@ function parseDatetime(buffer) {
 // --- 3. HTTP AND WEBSOCKET SERVER ---
 
 const httpServer = http.createServer((req, res) => {
-    Logger.debug('HTTP', 'Request received', { 
-        method: req.method, 
+    Logger.debug('HTTP', 'Request received', {
+        method: req.method,
         url: req.url,
         userAgent: req.headers['user-agent']
     });
-    
+
     if (req.url === '/' || req.url === '/index.html') {
         res.writeHead(200, { 'Content-Type': 'text/html' });
         res.end(getHtmlContent());
@@ -375,9 +450,9 @@ const httpServer = http.createServer((req, res) => {
         const filePath = path.join(__dirname, 'index.html');
         fs.readFile(filePath, (err, data) => {
             if (err) {
-                Logger.error('HTTP', 'Failed to read index.html file', { 
+                Logger.error('HTTP', 'Failed to read index.html file', {
                     filePath,
-                    error: err.message 
+                    error: err.message
                 });
                 res.writeHead(500, { 'Content-Type': 'text/plain' });
                 res.end('Internal Server Error');
@@ -394,64 +469,72 @@ const wss = new WebSocket.Server({ server: httpServer });
 
 wss.on('connection', ws => {
     Logger.info('WebSocket', 'New web client connected');
-    
+
     // Send the current state of all trackers to the newly connected client
     const initialData = Array.from(trackers.values());
     ws.send(JSON.stringify({ type: 'initial_state', data: initialData }));
     Logger.debug('WebSocket', 'Initial state sent to client', { trackerCount: initialData.length });
-    
+
     ws.on('message', message => {
         try {
             const data = JSON.parse(message);
-            Logger.debug('WebSocket', 'Message received from client', { 
+            Logger.debug('WebSocket', 'Message received from client', {
                 messageType: data.type,
-                hasData: !!data.data 
+                hasData: !!data.data
             });
 
             if (data.type === 'update' || data.type == 'initial_state') {
+                const loggedTime = new Date(); // Time when we're logging this
+                const payloadTime = data.data.datetime ? new Date(data.data.datetime) : null; // Time from GPS payload
+                const receivedTime = data.data.receivedTime ? new Date(data.data.receivedTime) : new Date(); // Time when server received the data
+
+                // Create timestamp table for comparison
+                const timestampTable = createTimestampTable(loggedTime, payloadTime, receivedTime);
+
                 trackers.set(data.data.imei, data.data);
-                
-                // Log tracker statistics after receiving data
-                const stats = getTrackerStats();
-                Logger.info('WebSocket', 'Tracker data received - current state', {
-                    totalTrackers: stats.totalTrackers,
-                    trackersByImei: stats.trackersByImei,
-                    latestDataTime: stats.latestDataTime
+
+                // Increment unbroadcasted message count for this IMEI
+                const currentCount = unbroadcastedMessages.get(data.data.imei) || 0;
+                unbroadcastedMessages.set(data.data.imei, currentCount + 1);
+
+                Logger.info('WebSocket', `Tracker data received${timestampTable}`, {
+                    imei: data.data.imei,
+                    unbroadcastedCount: unbroadcastedMessages.get(data.data.imei)
                 });
-                
+
                 broadcastToWebClients(data.data);
             }
         } catch (err) {
-            Logger.error('WebSocket', 'Error parsing client message', { 
+            Logger.error('WebSocket', 'Error parsing client message', {
                 error: err.message,
                 rawMessage: message.toString()
             });
         }
     });
-    
+
     ws.on('close', () => {
         Logger.info('WebSocket', 'Web client disconnected');
     });
-    
+
     ws.on('error', err => {
-        Logger.error('WebSocket', 'WebSocket connection error', { 
+        Logger.error('WebSocket', 'WebSocket connection error', {
             error: err.message,
-            code: err.code 
+            code: err.code
         });
     });
 });
 
 function broadcastToWebClients(data) {
-    Logger.debug('WebSocket', 'Broadcasting update to clients', { 
+    Logger.debug('WebSocket', 'Broadcasting update to clients', {
         imei: data.imei,
         clientCount: wss.clients.size,
         hasLocationData: !!(data.lat && data.lon)
     });
-    
-    const message = JSON.stringify({type: 'update', data: data});
+
+    const message = JSON.stringify({ type: 'update', data: data });
     let successCount = 0;
     let errorCount = 0;
-    
+
     wss.clients.forEach(client => {
         if (client.readyState === WebSocket.OPEN) {
             try {
@@ -459,28 +542,101 @@ function broadcastToWebClients(data) {
                 successCount++;
             } catch (err) {
                 errorCount++;
-                Logger.error('WebSocket', 'Failed to send message to client', { 
-                    error: err.message 
+                Logger.error('WebSocket', 'Failed to send message to client', {
+                    error: err.message
                 });
             }
         }
     });
-    
-    // Log tracker statistics after broadcasting
-    const stats = getTrackerStats();
-    Logger.info('WebSocket', 'Broadcast completed - current tracker state', {
-        totalTrackers: stats.totalTrackers,
-        trackersByImei: stats.trackersByImei,
-        latestDataTime: stats.latestDataTime,
+
+    // Create timestamp table for broadcast completion logging
+    const loggedTime = new Date(); // Time when we're logging this
+    const payloadTime = data.datetime ? new Date(data.datetime) : null; // Time from GPS payload
+    const receivedTime = data.receivedTime ? new Date(data.receivedTime) : new Date(); // Time when server received the data
+
+    // Create timestamp table for comparison
+    const timestampTable = createTimestampTable(loggedTime, payloadTime, receivedTime);
+
+    // Get unbroadcasted count before resetting
+    const unbroadcastedCount = unbroadcastedMessages.get(data.imei) || 0;
+
+    // Reset unbroadcasted message count after successful broadcast
+    if (successCount > 0) {
+        unbroadcastedMessages.set(data.imei, 0);
+    }
+
+    Logger.info('WebSocket', `Broadcast completed${timestampTable}`, {
+        imei: data.imei,
+        unbroadcastedCount: unbroadcastedCount,
         broadcastResults: { successCount, errorCount }
     });
-    
+
     if (errorCount > 0) {
-        Logger.warn('WebSocket', 'Broadcast completed with errors', { 
-            successCount, 
-            errorCount 
+        Logger.warn('WebSocket', 'Broadcast completed with errors', {
+            successCount,
+            errorCount
         });
     }
+}
+
+async function broadcastToWebClientsQueued(data) {
+    return new Promise((resolve, reject) => {
+        try {
+            Logger.debug('WebSocket', 'Broadcasting queued update to clients', {
+                imei: data.imei,
+                clientCount: wss.clients.size,
+                hasLocationData: !!(data.lat && data.lon)
+            });
+
+            const message = JSON.stringify({ type: 'update', data: data });
+            let successCount = 0;
+            let errorCount = 0;
+
+            wss.clients.forEach(client => {
+                if (client.readyState === WebSocket.OPEN) {
+                    try {
+                        client.send(message);
+                        successCount++;
+                    } catch (err) {
+                        errorCount++;
+                        Logger.error('WebSocket', 'Failed to send queued message to client', {
+                            error: err.message
+                        });
+                    }
+                }
+            });
+
+            // Create timestamp table for broadcast completion logging
+            const loggedTime = new Date(); // Time when we're logging this
+            const payloadTime = data.datetime ? new Date(data.datetime) : null; // Time from GPS payload
+            const receivedTime = data.receivedTime ? new Date(data.receivedTime) : new Date(); // Time when server received the data
+
+            // Create timestamp table for comparison
+            const timestampTable = createTimestampTable(loggedTime, payloadTime, receivedTime);
+
+            Logger.info('WebSocket', `Broadcast completed${timestampTable}`, {
+                imei: data.imei,
+                unbroadcastedCount: unbroadcastedMessages.get(data.imei) || 0,
+                broadcastResults: { successCount, errorCount }
+            });
+
+            if (errorCount > 0) {
+                Logger.warn('WebSocket', 'Broadcast completed with errors', {
+                    successCount,
+                    errorCount
+                });
+            }
+
+            resolve({ successCount, errorCount });
+        } catch (error) {
+            Logger.error('WebSocket', 'Error in queued broadcast', {
+                imei: data.imei,
+                error: error.message,
+                stack: error.stack
+            });
+            reject(error);
+        }
+    });
 }
 
 function getHtmlContent() {
