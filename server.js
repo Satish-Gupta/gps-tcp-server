@@ -62,6 +62,9 @@ class Logger {
             const metaStr = Object.keys(metadata).length > 0 ? ` ${JSON.stringify(metadata)}` : '';
             console.log(`[${timestamp}] [${level}] [${component}] ${message}${metaStr}`);
         }
+
+        // Add line gap after each log entry
+        console.log();
     }
 
     static error(component, message, metadata = {}) {
@@ -98,16 +101,16 @@ const messageCounters = new Map(); // Key: IMEI, Value: total message count
 function generateMessageIds(imei) {
     const currentCount = (messageCounters.get(imei) || 0) + 1;
     messageCounters.set(imei, currentCount);
-    
+
     const messageId = currentCount.toString().padStart(4, '0');
     const imeiSuffix = imei.slice(-4);
     const messagePrefix = `${imeiSuffix}-${messageId}`;
-    
+
     // Generate unique queue ID (timestamp + random)
     const timestamp = Date.now().toString(36);
     const random = Math.random().toString(36).substr(2, 4);
     const queueId = `${timestamp}-${random}`;
-    
+
     return { messageId, messagePrefix, queueId, totalCount: currentCount };
 }
 
@@ -191,7 +194,7 @@ function enqueueMessage(imei, trackerData) {
 
     // Generate message ID and queue ID
     const { messageId, messagePrefix, queueId, totalCount } = generateMessageIds(imei);
-    
+
     // Add message ID and queue ID to tracker data
     trackerData.messageId = messageId;
     trackerData.messagePrefix = messagePrefix;
