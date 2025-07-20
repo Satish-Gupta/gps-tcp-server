@@ -105,7 +105,7 @@ const pendingMessages = new Map(); // Key: clientId, Value: Array of {messageId,
 const RETENTION_CONFIG = {
     TIME_LIMIT: 15 * 60 * 1000,  // 15 minutes
     MESSAGE_LIMIT: 1000,         // 1000 messages per client
-    CLEANUP_INTERVAL: 5 * 60 * 1000  // Check every minute
+    CLEANUP_INTERVAL: 60 * 1000  // Check every minute
 };
 
 // Helper function to generate unique message ID and queue ID
@@ -810,6 +810,21 @@ async function broadcastToWebClientsQueued(data) {
                             error: err.message
                         });
                     }
+                }
+            });
+
+            // Track message for all registered clients (even if disconnected)
+            REGISTERED_CLIENTS.forEach(clientId => {
+                const isConnected = Array.from(wss.clients).some(client =>
+                    client.clientId === clientId && client.readyState === WebSocket.OPEN
+                );
+
+                if (!isConnected) {
+                    addPendingMessage(clientId, data.messageId, data.queueId, data);
+                    Logger.debug('ACK', `Message tracked for disconnected client [${data.messagePrefix}] [Q:${data.queueId}]`, {
+                        clientId,
+                        messageId: data.messageId
+                    });
                 }
             });
 
