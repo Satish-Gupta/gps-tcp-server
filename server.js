@@ -105,7 +105,7 @@ const pendingMessages = new Map(); // Key: clientId, Value: Array of {messageId,
 const RETENTION_CONFIG = {
     TIME_LIMIT: 15 * 60 * 1000,  // 15 minutes
     MESSAGE_LIMIT: 1000,         // 1000 messages per client
-    CLEANUP_INTERVAL: 60 * 1000  // Check every minute
+    CLEANUP_INTERVAL: 5 * 60 * 1000  // Check every minute
 };
 
 // Helper function to generate unique message ID and queue ID
