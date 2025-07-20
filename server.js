@@ -200,28 +200,28 @@ function initializePendingMessages(clientId) {
 
 function addPendingMessage(clientId, messageId, queueId, data) {
     if (!REGISTERED_CLIENTS.has(clientId)) return; // Only track for registered clients
-    
+
     initializePendingMessages(clientId);
-    
+
     const pendingMessage = {
         messageId,
         queueId,
         data,
         timestamp: Date.now()
     };
-    
+
     const clientPending = pendingMessages.get(clientId);
     clientPending.push(pendingMessage);
-    
+
     // Enforce message limit (FIFO - remove oldest if over limit)
     if (clientPending.length > RETENTION_CONFIG.MESSAGE_LIMIT) {
         const removed = clientPending.shift();
-        Logger.debug('ACK', 'Message limit exceeded, removed oldest', { 
-            clientId, 
-            removedMessageId: removed.messageId 
+        Logger.debug('ACK', 'Message limit exceeded, removed oldest', {
+            clientId,
+            removedMessageId: removed.messageId
         });
     }
-    
+
     Logger.debug('ACK', `Message added to pending [${messageId}] [Q:${queueId}]`, {
         clientId,
         pendingCount: clientPending.length
@@ -230,23 +230,37 @@ function addPendingMessage(clientId, messageId, queueId, data) {
 
 function removePendingMessage(clientId, messageId, queueId) {
     const clientPending = pendingMessages.get(clientId);
-    if (!clientPending) return false;
-    
-    const index = clientPending.findIndex(msg => 
+    if (!clientPending) {
+        Logger.warn('ACK', `No pending messages for client [${messageId}] [Q:${queueId}]`, {
+            clientId,
+            totalClients: pendingMessages.size
+        });
+        return false;
+    }
+
+    const index = clientPending.findIndex(msg =>
         msg.messageId === messageId && msg.queueId === queueId
     );
-    
+
     if (index !== -1) {
-        clientPending.splice(index, 1);
+        const removedMsg = clientPending.splice(index, 1)[0];
+        const messageAge = Date.now() - removedMsg.timestamp;
+
         Logger.info('ACK', `Message acknowledged [${messageId}] [Q:${queueId}]`, {
             clientId,
-            remainingPending: clientPending.length
+            remainingPending: clientPending.length,
+            messageAge: Math.round(messageAge / 1000) + 's'
         });
         return true;
     }
-    
+
+    // Debug: Show what messages are actually pending for this client
+    const pendingIds = clientPending.map(msg => `${msg.messageId}:${msg.queueId.slice(-4)}`);
+
     Logger.warn('ACK', `Message not found for acknowledgment [${messageId}] [Q:${queueId}]`, {
-        clientId
+        clientId,
+        pendingCount: clientPending.length,
+        pendingMessages: pendingIds.slice(0, 5) // Show first 5 pending messages
     });
     return false;
 }
@@ -254,21 +268,21 @@ function removePendingMessage(clientId, messageId, queueId) {
 function cleanupExpiredMessages() {
     const now = Date.now();
     let totalCleaned = 0;
-    
+
     for (const [clientId, clientPending] of pendingMessages.entries()) {
         const initialCount = clientPending.length;
-        
+
         // Remove messages older than retention time limit
         const filtered = clientPending.filter(msg => {
             const age = now - msg.timestamp;
             return age <= RETENTION_CONFIG.TIME_LIMIT;
         });
-        
+
         const cleanedCount = initialCount - filtered.length;
         if (cleanedCount > 0) {
             pendingMessages.set(clientId, filtered);
             totalCleaned += cleanedCount;
-            
+
             Logger.debug('ACK', 'Expired messages cleaned up', {
                 clientId,
                 cleanedCount,
@@ -276,7 +290,7 @@ function cleanupExpiredMessages() {
             });
         }
     }
-    
+
     if (totalCleaned > 0) {
         Logger.info('ACK', 'Cleanup completed', { totalCleaned });
     }
@@ -606,12 +620,12 @@ wss.on('connection', (ws, req) => {
     // Extract client ID from URL query parameters
     const url = new URL(req.url, `http://${req.headers.host}`);
     const clientId = url.searchParams.get('clientId');
-    
+
     if (clientId && REGISTERED_CLIENTS.has(clientId)) {
         ws.clientId = clientId;
         clientConnections.set(clientId, ws);
         Logger.info('WebSocket', 'Registered client connected', { clientId });
-        
+
         // Send pending messages to reconnected client
         const pending = pendingMessages.get(clientId) || [];
         if (pending.length > 0) {
@@ -619,14 +633,14 @@ wss.on('connection', (ws, req) => {
                 clientId,
                 pendingCount: pending.length
             });
-            
+
             pending.forEach(pendingMsg => {
                 ws.send(JSON.stringify({ type: 'update', data: pendingMsg.data }));
             });
         }
     } else {
         ws.clientId = null;
-        Logger.info('WebSocket', 'Unregistered client connected', { 
+        Logger.info('WebSocket', 'Unregistered client connected', {
             clientId: clientId || 'none',
             remoteAddress: req.socket.remoteAddress
         });
@@ -635,9 +649,9 @@ wss.on('connection', (ws, req) => {
     // Send the current state of all trackers to the newly connected client
     const initialData = Array.from(trackers.values());
     ws.send(JSON.stringify({ type: 'initial_state', data: initialData }));
-    Logger.debug('WebSocket', 'Initial state sent to client', { 
+    Logger.debug('WebSocket', 'Initial state sent to client', {
         clientId: ws.clientId,
-        trackerCount: initialData.length 
+        trackerCount: initialData.length
     });
 
     ws.on('message', message => {
@@ -785,7 +799,7 @@ async function broadcastToWebClientsQueued(data) {
                     try {
                         client.send(message);
                         successCount++;
-                        
+
                         // Track message for registered clients
                         if (client.clientId && REGISTERED_CLIENTS.has(client.clientId)) {
                             addPendingMessage(client.clientId, data.messageId, data.queueId, data);
@@ -985,7 +999,7 @@ httpServer.listen(HTTP_PORT, () => {
 
 // Start cleanup timer for expired messages
 setInterval(cleanupExpiredMessages, RETENTION_CONFIG.CLEANUP_INTERVAL);
-Logger.info('ACK', 'Message cleanup timer started', { 
+Logger.info('ACK', 'Message cleanup timer started', {
     interval: RETENTION_CONFIG.CLEANUP_INTERVAL / 1000 + 's',
     retentionTime: RETENTION_CONFIG.TIME_LIMIT / 1000 + 's',
     messageLimit: RETENTION_CONFIG.MESSAGE_LIMIT
