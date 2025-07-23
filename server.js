@@ -62,9 +62,6 @@ class Logger {
             const metaStr = Object.keys(metadata).length > 0 ? ` ${JSON.stringify(metadata)}` : '';
             console.log(`[${timestamp}] [${level}] [${component}] ${message}${metaStr}`);
         }
-
-        // Add line gap after each log entry
-        console.log();
     }
 
     static error(component, message, metadata = {}) {
@@ -97,31 +94,20 @@ const broadcastInProgress = new Map(); // Key: IMEI, Value: boolean (true if bro
 const unbroadcastedMessages = new Map(); // Key: IMEI, Value: count
 const messageCounters = new Map(); // Key: IMEI, Value: total message count
 
-// Client acknowledgment system
-const REGISTERED_CLIENTS = new Set(['client-001', 'client-002', 'client-003']);
-const clientConnections = new Map(); // Key: clientId, Value: WebSocket connection
-const pendingMessages = new Map(); // Key: clientId, Value: Array of {messageId, queueId, data, timestamp}
-
-const RETENTION_CONFIG = {
-    TIME_LIMIT: 15 * 60 * 1000,  // 15 minutes
-    MESSAGE_LIMIT: 1000,         // 1000 messages per client
-    CLEANUP_INTERVAL: 60 * 1000  // Check every minute
-};
-
 // Helper function to generate unique message ID and queue ID
 function generateMessageIds(imei) {
     const currentCount = (messageCounters.get(imei) || 0) + 1;
     messageCounters.set(imei, currentCount);
-
+    
     const messageId = currentCount.toString().padStart(4, '0');
     const imeiSuffix = imei.slice(-4);
     const messagePrefix = `${imeiSuffix}-${messageId}`;
-
+    
     // Generate unique queue ID (timestamp + random)
     const timestamp = Date.now().toString(36);
     const random = Math.random().toString(36).substr(2, 4);
     const queueId = `${timestamp}-${random}`;
-
+    
     return { messageId, messagePrefix, queueId, totalCount: currentCount };
 }
 
@@ -190,112 +176,6 @@ function getTrackerStats() {
     return stats;
 }
 
-// Client acknowledgment management functions
-function initializePendingMessages(clientId) {
-    if (!pendingMessages.has(clientId)) {
-        pendingMessages.set(clientId, []);
-        Logger.debug('ACK', 'Initialized pending messages for client', { clientId });
-    }
-}
-
-function addPendingMessage(clientId, messageId, queueId, data) {
-    if (!REGISTERED_CLIENTS.has(clientId)) return; // Only track for registered clients
-
-    initializePendingMessages(clientId);
-
-    const pendingMessage = {
-        messageId,
-        queueId,
-        data,
-        timestamp: Date.now()
-    };
-
-    const clientPending = pendingMessages.get(clientId);
-    clientPending.push(pendingMessage);
-
-    // Enforce message limit (FIFO - remove oldest if over limit)
-    if (clientPending.length > RETENTION_CONFIG.MESSAGE_LIMIT) {
-        const removed = clientPending.shift();
-        Logger.debug('ACK', 'Message limit exceeded, removed oldest', {
-            clientId,
-            removedMessageId: removed.messageId
-        });
-    }
-
-    Logger.debug('ACK', `Message added to pending [${messageId}] [Q:${queueId}]`, {
-        clientId,
-        pendingCount: clientPending.length
-    });
-}
-
-function removePendingMessage(clientId, messageId, queueId) {
-    const clientPending = pendingMessages.get(clientId);
-    if (!clientPending) {
-        Logger.warn('ACK', `No pending messages for client [${messageId}] [Q:${queueId}]`, {
-            clientId,
-            totalClients: pendingMessages.size
-        });
-        return false;
-    }
-
-    const index = clientPending.findIndex(msg =>
-        msg.messageId === messageId && msg.queueId === queueId
-    );
-
-    if (index !== -1) {
-        const removedMsg = clientPending.splice(index, 1)[0];
-        const messageAge = Date.now() - removedMsg.timestamp;
-
-        Logger.info('ACK', `Message acknowledged [${messageId}] [Q:${queueId}]`, {
-            clientId,
-            remainingPending: clientPending.length,
-            messageAge: Math.round(messageAge / 1000) + 's'
-        });
-        return true;
-    }
-
-    // Debug: Show what messages are actually pending for this client
-    const pendingIds = clientPending.map(msg => `${msg.messageId}:${msg.queueId.slice(-4)}`);
-
-    Logger.warn('ACK', `Message not found for acknowledgment [${messageId}] [Q:${queueId}]`, {
-        clientId,
-        pendingCount: clientPending.length,
-        pendingMessages: pendingIds.slice(0, 5) // Show first 5 pending messages
-    });
-    return false;
-}
-
-function cleanupExpiredMessages() {
-    const now = Date.now();
-    let totalCleaned = 0;
-
-    for (const [clientId, clientPending] of pendingMessages.entries()) {
-        const initialCount = clientPending.length;
-
-        // Remove messages older than retention time limit
-        const filtered = clientPending.filter(msg => {
-            const age = now - msg.timestamp;
-            return age <= RETENTION_CONFIG.TIME_LIMIT;
-        });
-
-        const cleanedCount = initialCount - filtered.length;
-        if (cleanedCount > 0) {
-            pendingMessages.set(clientId, filtered);
-            totalCleaned += cleanedCount;
-
-            Logger.debug('ACK', 'Expired messages cleaned up', {
-                clientId,
-                cleanedCount,
-                remainingCount: filtered.length
-            });
-        }
-    }
-
-    if (totalCleaned > 0) {
-        Logger.info('ACK', 'Cleanup completed', { totalCleaned });
-    }
-}
-
 // Message queue management functions
 function initializeQueue(imei) {
     if (!messageQueues.has(imei)) {
@@ -311,7 +191,7 @@ function enqueueMessage(imei, trackerData) {
 
     // Generate message ID and queue ID
     const { messageId, messagePrefix, queueId, totalCount } = generateMessageIds(imei);
-
+    
     // Add message ID and queue ID to tracker data
     trackerData.messageId = messageId;
     trackerData.messagePrefix = messagePrefix;
@@ -616,71 +496,23 @@ const httpServer = http.createServer((req, res) => {
 
 const wss = new WebSocket.Server({ server: httpServer });
 
-wss.on('connection', (ws, req) => {
-    // Extract client ID from URL query parameters
-    const url = new URL(req.url, `http://${req.headers.host}`);
-    const clientId = url.searchParams.get('clientId');
-
-    if (clientId && REGISTERED_CLIENTS.has(clientId)) {
-        ws.clientId = clientId;
-        clientConnections.set(clientId, ws);
-        Logger.info('WebSocket', 'Registered client connected', { clientId });
-
-        // Send pending messages to reconnected client
-        const pending = pendingMessages.get(clientId) || [];
-        if (pending.length > 0) {
-            Logger.info('ACK', 'Sending pending messages to reconnected client', {
-                clientId,
-                pendingCount: pending.length
-            });
-
-            pending.forEach(pendingMsg => {
-                ws.send(JSON.stringify({ type: 'update', data: pendingMsg.data }));
-            });
-        }
-    } else {
-        ws.clientId = null;
-        Logger.info('WebSocket', 'Unregistered client connected', {
-            clientId: clientId || 'none',
-            remoteAddress: req.socket.remoteAddress
-        });
-    }
+wss.on('connection', ws => {
+    Logger.info('WebSocket', 'New web client connected');
 
     // Send the current state of all trackers to the newly connected client
     const initialData = Array.from(trackers.values());
     ws.send(JSON.stringify({ type: 'initial_state', data: initialData }));
-    Logger.debug('WebSocket', 'Initial state sent to client', {
-        clientId: ws.clientId,
-        trackerCount: initialData.length
-    });
+    Logger.debug('WebSocket', 'Initial state sent to client', { trackerCount: initialData.length });
 
     ws.on('message', message => {
         try {
             const data = JSON.parse(message);
             Logger.debug('WebSocket', 'Message received from client', {
                 messageType: data.type,
-                hasData: !!data.data,
-                clientId: ws.clientId
+                hasData: !!data.data
             });
 
-            if (data.type === 'ack') {
-                // Handle acknowledgment from registered clients
-                if (ws.clientId && REGISTERED_CLIENTS.has(ws.clientId)) {
-                    const success = removePendingMessage(ws.clientId, data.messageId, data.queueId);
-                    if (!success) {
-                        Logger.warn('ACK', 'Received ACK for unknown message', {
-                            clientId: ws.clientId,
-                            messageId: data.messageId,
-                            queueId: data.queueId
-                        });
-                    }
-                } else {
-                    Logger.warn('ACK', 'Received ACK from unregistered client', {
-                        clientId: ws.clientId || 'unknown',
-                        messageId: data.messageId
-                    });
-                }
-            } else if (data.type === 'update' || data.type == 'initial_state') {
+            if (data.type === 'update' || data.type == 'initial_state') {
                 const loggedTime = new Date(); // Time when we're logging this
                 const payloadTime = data.data.datetime ? new Date(data.data.datetime) : null; // Time from GPS payload
                 const receivedTime = data.data.receivedTime ? new Date(data.data.receivedTime) : new Date(); // Time when server received the data
@@ -710,12 +542,7 @@ wss.on('connection', (ws, req) => {
     });
 
     ws.on('close', () => {
-        if (ws.clientId && REGISTERED_CLIENTS.has(ws.clientId)) {
-            clientConnections.delete(ws.clientId);
-            Logger.info('WebSocket', 'Registered client disconnected', { clientId: ws.clientId });
-        } else {
-            Logger.info('WebSocket', 'Unregistered client disconnected');
-        }
+        Logger.info('WebSocket', 'Web client disconnected');
     });
 
     ws.on('error', err => {
@@ -799,32 +626,12 @@ async function broadcastToWebClientsQueued(data) {
                     try {
                         client.send(message);
                         successCount++;
-
-                        // Track message for registered clients
-                        if (client.clientId && REGISTERED_CLIENTS.has(client.clientId)) {
-                            addPendingMessage(client.clientId, data.messageId, data.queueId, data);
-                        }
                     } catch (err) {
                         errorCount++;
                         Logger.error('WebSocket', 'Failed to send queued message to client', {
                             error: err.message
                         });
                     }
-                }
-            });
-
-            // Track message for all registered clients (even if disconnected)
-            REGISTERED_CLIENTS.forEach(clientId => {
-                const isConnected = Array.from(wss.clients).some(client =>
-                    client.clientId === clientId && client.readyState === WebSocket.OPEN
-                );
-
-                if (!isConnected) {
-                    addPendingMessage(clientId, data.messageId, data.queueId, data);
-                    Logger.debug('ACK', `Message tracked for disconnected client [${data.messagePrefix}] [Q:${data.queueId}]`, {
-                        clientId,
-                        messageId: data.messageId
-                    });
                 }
             });
 
@@ -1010,12 +817,4 @@ tcpServer.listen(TCP_PORT, () => {
 
 httpServer.listen(HTTP_PORT, () => {
     Logger.info('SERVER', 'HTTP server started', { port: HTTP_PORT, url: `http://localhost:${HTTP_PORT}` });
-});
-
-// Start cleanup timer for expired messages
-setInterval(cleanupExpiredMessages, RETENTION_CONFIG.CLEANUP_INTERVAL);
-Logger.info('ACK', 'Message cleanup timer started', {
-    interval: RETENTION_CONFIG.CLEANUP_INTERVAL / 1000 + 's',
-    retentionTime: RETENTION_CONFIG.TIME_LIMIT / 1000 + 's',
-    messageLimit: RETENTION_CONFIG.MESSAGE_LIMIT
 });
